@@ -2,8 +2,8 @@
 
 ## Install
 ```
-go get github.com/wushilin/golib/stream
-go get github.com/wushilin/golib/parallel
+go get github.com/wushilin/stream
+go get github.com/wushilin/parallel
 ```
 
 ## Documentation
@@ -18,7 +18,7 @@ Browse http://localhost:1666
 #### Stream from slice/array
 
 ```
-import "github.com/wushilin/golib/stream"
+import "github.com/wushilin/stream"
 
 var s Stream = stream.Range(0, 10)
 var sum Optional = s.Filter(func(i interface{}) bool {
