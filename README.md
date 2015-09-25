@@ -1,8 +1,10 @@
 # golib
 
 ## Install
-$ go get github.com/wushilin/golib/stream
-$ go get github.com/wushilin/golib/parallel
+```
+go get github.com/wushilin/golib/stream
+go get github.com/wushilin/golib/parallel
+```
 
 ## Documentation
 $ godoc -http=":16666"
