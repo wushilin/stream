@@ -14,10 +14,11 @@ import (
 // A void func is a func that takes no argument, and returns nothing
 // Note many other func can be easily converted to VoidFunc
 // For example
-// func add(i, j int) {return i + j}
-// => func(){
-//      add(4, 5)
-//    }
+//   func add(i, j int) {return i + j}
+// => 
+//   func(){
+//     add(4, 5)
+//   }
 type VoidFunc func()
 
 // ProducerFunc is a func that produces a result
@@ -25,9 +26,9 @@ type VoidFunc func()
 type ProducerFunc func() interface{}
 
 // A map function is a transform function
-// func(a interface{}) interface{} {
-//   return a
-// }
+//   func(a interface{}) interface{} {
+//     return a
+//   }
 // is a dummy map function.
 // The type of x and result should be the same
 type MapFunc func(x interface{}) interface{}
@@ -42,11 +43,11 @@ type ReduceFunc func(x, y interface{}) interface{}
 type LessThanCmpFunc func(x, y interface{}) bool
 
 // Predict function is a filter/test func. Test whether an object match the predict.
-// a -> a>=5 is a predict function
+//   a -> a>=5 is a predict function
 type PredictFunc func(x interface{}) bool
 
 // It is like a map function, but produce no result
-// a->fmt.Println(a) is a MapCallFunc
+//   a -> fmt.Println(a) is a MapCallFunc
 type MapCallFunc func(x interface{})
 
 // Natural LessThanCmp function. Only supports number and strings
@@ -130,20 +131,20 @@ type Stream interface {
 	// For each element of the stream, apply a map function, and return the
 	// mapped result stream. It is lazy so only operated when you use a terminal operator
 	// e.g.
-	// stream.Range(0, 10).Map(func(a interface{}) interface{} {
-	//   return a.(int) + 1
-	// }
+	//   stream.Range(0, 10).Map(func(a interface{}) interface{} {
+	//     return a.(int) + 1
+	//   }
 	// will return a lazy stream, from 1~10 (not range(0,10) is 0~9)
 	Map(f MapFunc) Stream
 
 	// Use a reduce function to reduce elements in the stream and return reduced resumt.
 	// e.g.
-	// stream.Range(0, 10).Reduce(func(a, b interface{}) interface{} {
-	//   if a.(int) > b.(int) {
-	//     return a
+	//   stream.Range(0, 10).Reduce(func(a, b interface{}) interface{} {
+	//     if a.(int) > b.(int) {
+	//       return a
+	//     }
+	//     return b
 	//   }
-	//   return b
-	// }
 	// will return an optional, value is 9. This essentially reduce using Max(a,b) function
 	// This is a terminal operator
 	Reduce(f ReduceFunc) Optional
@@ -158,20 +159,20 @@ type Stream interface {
 	// Similar to Map, but skip if the predict func did not pass the test.
 	// Return a lazy stream
 	// e.g.
-	// stream.Range(0, 10).Filer(func(a interface{}) bool) {
-	//    return a.(int) > 5
-	// }
+	//   stream.Range(0, 10).Filer(func(a interface{}) bool) {
+	//      return a.(int) > 5
+	//   }
 	// will return a stream from [6 ~ 9]
 	Filter(f PredictFunc) Stream
 
 	// For each of the stream, do the function
 	// e.g.
 	// var sum := 0
-	// stream.Of(1, 2, 3).Each(func(i interface{}) {
-	//   sum = sum + i.(int)
-	// })
+	//   stream.Of(1, 2, 3).Each(func(i interface{}) {
+	//     sum = sum + i.(int)
+	//   })
 	// will return 6
-	// Note this is a terminal operator
+	//   Note this is a terminal operator
 	Each(f MapCallFunc)
 
 	// Close the stream. If your stream if from files, you have to close it.
@@ -213,17 +214,18 @@ type Stream interface {
 
 	// Return a new stream of itself, but when elements are consumed, the peek function is called
 	// e.g.
-	// sum := 0
-	// fmt.Println(stream.Range(0, 10).Peek(func(i interface) {
-	//   sum = sum + i.(int)
-	// }).Count())
-	// fmt.Println("Sum is", sum)
+	//   sum := 0
+	//   fmt.Println(stream.Range(0, 10).Peek(func(i interface) {
+	//     sum = sum + i.(int)
+	//   }).Count())
+	//   fmt.Println("Sum is", sum)
 	// This will count the elements, as well as add a sum
 	Peek(f MapCallFunc) Stream
 
 	// Return sum of the elements, only supports int, int32, int64, uint32, uint64
 	// float32, float64
-	// call val, ok := result.Value()
+	// call 
+	//   val, ok := result.Value()
 	// if ok => val can be used
 	// otherwise, the val can't be used
 	Sum() Optional
@@ -255,11 +257,11 @@ func (v *iterIter) Next() (interface{}, bool) {
 // Generate a infinite stream, using seed as first element, then
 // use MapFun and the previously returned value to generate the new value
 // e.g. 
-// func add1(i interface{}) interface{} {
-//   return i.(int) + 1
-// }
-// stream.Iterate(1, add1).Limit(3) will produce the same as
-// stream.Of(1, 2, 3)
+//   func add1(i interface{}) interface{} {
+//     return i.(int) + 1
+//   }
+//   stream.Iterate(1, add1).Limit(3) <= will produce the same as
+//   stream.Of(1, 2, 3)
 func Iterate(seed interface{}, f MapFunc) Stream {
 	return &baseStream{&iterIter{seed, f, false}, nil}
 }
@@ -274,9 +276,9 @@ func (v *genIter) Next() (interface{}, bool) {
 
 // Generate will use the GenFunc to generate a infinite stream
 // e.g. 
-// stream.Generate(func() interface{} {
-//   return 5
-// }
+//   stream.Generate(func() interface{} {
+//     return 5
+//   }
 // will generate a infinite stream of 5. 
 // Note it is lazy so do not count infinite stream, it will not complete
 // Similarly, do not Reduce infinite stream
@@ -331,10 +333,10 @@ func FromMapEntries(it interface{}) Stream {
 // Return stream's mas, using natural comparison. Support number and string
 // Note since stream might be empty, the value is Optional.
 // Caller must use 
-// val, ok := result.Value()
-// if ok {
-//   do_something_with(val)
-// }
+//   val, ok := result.Value()
+//   if ok {
+//     do_something_with(val)
+//   }
 func (v *baseStream) Max() Optional {
 	return v.MaxCmp(NaturalCmpFunc)
 }
@@ -342,10 +344,10 @@ func (v *baseStream) Max() Optional {
 // Return stream's min, using natural comparison. Support number and string
 // Note since stream might be empty, the value is Optional.
 // Caller must use 
-// val, ok := result.Value()
-// if ok {
-//   do_something_with(val)
-// }
+//   val, ok := result.Value()
+//   if ok {
+//     do_something_with(val)
+//   }
 func (v *baseStream) Min() Optional {
 	return v.MinCmp(NaturalCmpFunc)
 }
@@ -353,10 +355,10 @@ func (v *baseStream) Min() Optional {
 // Return stream's max, using supplied less than comparator. 
 // Note since stream might be empty, the value is Optional.
 // Caller must use 
-// val, ok := result.Value()
-// if ok {
-//   do_something_with(val)
-// }
+//   val, ok := result.Value()
+//   if ok {
+//     do_something_with(val)
+//   }
 func (v *baseStream) MaxCmp(f LessThanCmpFunc) Optional {
 	return v.Reduce(func(i, j interface{}) interface{} {
 		if f(i, j) {
@@ -369,10 +371,10 @@ func (v *baseStream) MaxCmp(f LessThanCmpFunc) Optional {
 // Return stream's min, using supplied less than comparator. 
 // Note since stream might be empty, the value is Optional.
 // Caller must use 
-// val, ok := result.Value()
-// if ok {
-//   do_something_with(val)
-// }
+//   val, ok := result.Value()
+//   if ok {
+//     do_something_with(val)
+//   }
 func (v *baseStream) MinCmp(f LessThanCmpFunc) Optional {
 	return v.Reduce(func(i, j interface{}) interface{} {
 		if f(i, j) {
@@ -767,9 +769,9 @@ func (v *baseStream) Peek(f MapCallFunc) Stream {
 
 // Create a stream from a set of values.
 // e.g. 
-// stream.Of(1,2,3,4,5).Sum().Value() => 15, true
+//   stream.Of(1,2,3,4,5).Sum().Value() => 15, true
 // 15 is the result, true means the optional actually have a value
-// stream.Of().Sum().Value() => nil, false
+//   stream.Of().Sum().Value() => nil, false
 // nil is default result, false means the stream is empty, so sum
 // is non-existent
 func Of(vars ...interface{}) Stream {
