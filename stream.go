@@ -15,11 +15,14 @@ import (
 // Note many other func can be easily converted to VoidFunc
 // For example
 //   func add(i, j int) {return i + j}
-// => 
+// =>
 //   func(){
 //     add(4, 5)
 //   }
 type VoidFunc func()
+
+// A func returns a slice of values
+type ValueFunc func() []interface{}
 
 // ProducerFunc is a func that produces a result
 // If your signature doesn't match, you can wrap it with inline func
@@ -109,7 +112,6 @@ var SumFloat64 = func(i, j interface{}) interface{} {
 	return i.(float64) + j.(float64)
 }
 
-
 // Optional value may or may not have a value
 type Optional interface {
 	// Return the value and if value doesn't exist, false.
@@ -125,7 +127,6 @@ type Optional interface {
 	OrValue(defaultV interface{}) interface{}
 }
 
-
 // Stream defines java like stream magics
 type Stream interface {
 	// For each element of the stream, apply a map function, and return the
@@ -135,7 +136,7 @@ type Stream interface {
 	//     return a.(int) + 1
 	//   }
 	// will return a lazy stream, from 1~10 (not range(0,10) is 0~9)
-	Map(f MapFunc) Stream
+	Map(f interface{}) Stream
 
 	// Use a reduce function to reduce elements in the stream and return reduced resumt.
 	// e.g.
@@ -147,7 +148,7 @@ type Stream interface {
 	//   }
 	// will return an optional, value is 9. This essentially reduce using Max(a,b) function
 	// This is a terminal operator
-	Reduce(f ReduceFunc) Optional
+	Reduce(f interface{}) Optional
 
 	// Lazily limit the elements to process to number
 	Limit(number int) Stream
@@ -163,7 +164,7 @@ type Stream interface {
 	//      return a.(int) > 5
 	//   }
 	// will return a stream from [6 ~ 9]
-	Filter(f PredictFunc) Stream
+	Filter(f interface{}) Stream
 
 	// For each of the stream, do the function
 	// e.g.
@@ -173,7 +174,7 @@ type Stream interface {
 	//   })
 	// will return 6
 	//   Note this is a terminal operator
-	Each(f MapCallFunc)
+	Each(f interface{})
 
 	// Close the stream. If your stream if from files, you have to close it.
 	// Any OnClose handler previously attached will be called
@@ -198,10 +199,10 @@ type Stream interface {
 	CollectTo(target interface{}) int
 
 	// Get max in the stream using a less comparator function
-	MaxCmp(f LessThanCmpFunc) Optional
+	MaxCmp(f interface{}) Optional
 
 	// Get min in the stream using a less comparator function
-	MinCmp(f LessThanCmpFunc) Optional
+	MinCmp(f interface{}) Optional
 
 	// Get max in the stream, using natural comparator. Only supports numbers and strings
 	Max() Optional
@@ -220,11 +221,11 @@ type Stream interface {
 	//   }).Count())
 	//   fmt.Println("Sum is", sum)
 	// This will count the elements, as well as add a sum
-	Peek(f MapCallFunc) Stream
+	Peek(f interface{}) Stream
 
 	// Return sum of the elements, only supports int, int32, int64, uint32, uint64
 	// float32, float64
-	// call 
+	// call
 	//   val, ok := result.Value()
 	// if ok => val can be used
 	// otherwise, the val can't be used
@@ -256,14 +257,15 @@ func (v *iterIter) Next() (interface{}, bool) {
 
 // Generate a infinite stream, using seed as first element, then
 // use MapFun and the previously returned value to generate the new value
-// e.g. 
+// e.g.
 //   func add1(i interface{}) interface{} {
 //     return i.(int) + 1
 //   }
 //   stream.Iterate(1, add1).Limit(3) <= will produce the same as
 //   stream.Of(1, 2, 3)
-func Iterate(seed interface{}, f MapFunc) Stream {
-	return &baseStream{&iterIter{seed, f, false}, nil}
+func Iterate(seed interface{}, f interface{}) Stream {
+	myf := toMapFunc(f)
+	return &baseStream{&iterIter{seed, myf, false}, nil}
 }
 
 type genIter struct {
@@ -275,16 +277,17 @@ func (v *genIter) Next() (interface{}, bool) {
 }
 
 // Generate will use the GenFunc to generate a infinite stream
-// e.g. 
+// e.g.
 //   stream.Generate(func() interface{} {
 //     return 5
 //   }
-// will generate a infinite stream of 5. 
+// will generate a infinite stream of 5.
 // Note it is lazy so do not count infinite stream, it will not complete
 // Similarly, do not Reduce infinite stream
 // You can limit first before reducing
-func Generate(f GenFunc) Stream {
-	return &baseStream{&genIter{f}, nil}
+func Generate(f interface{}) Stream {
+	myf := toGenFunc(f)
+	return &baseStream{&genIter{myf}, nil}
 }
 
 // Return stream from iterator. stream's reduce function will consume all
@@ -302,7 +305,7 @@ func FromArray(it interface{}) Stream {
 
 // Return stream from channel. If you use same channel create multiple streams
 // all streams will share the channel and may see part of the data
-// Sender of channel must close or stream's reduce function/map function 
+// Sender of channel must close or stream's reduce function/map function
 // may not terminate
 func FromChannel(it interface{}) Stream {
 	ai := NewChannelIterator(it)
@@ -332,7 +335,7 @@ func FromMapEntries(it interface{}) Stream {
 
 // Return stream's mas, using natural comparison. Support number and string
 // Note since stream might be empty, the value is Optional.
-// Caller must use 
+// Caller must use
 //   val, ok := result.Value()
 //   if ok {
 //     do_something_with(val)
@@ -343,7 +346,7 @@ func (v *baseStream) Max() Optional {
 
 // Return stream's min, using natural comparison. Support number and string
 // Note since stream might be empty, the value is Optional.
-// Caller must use 
+// Caller must use
 //   val, ok := result.Value()
 //   if ok {
 //     do_something_with(val)
@@ -352,32 +355,35 @@ func (v *baseStream) Min() Optional {
 	return v.MinCmp(NaturalCmpFunc)
 }
 
-// Return stream's max, using supplied less than comparator. 
+// Return stream's max, using supplied less than comparator.
 // Note since stream might be empty, the value is Optional.
-// Caller must use 
+// Caller must use
 //   val, ok := result.Value()
 //   if ok {
 //     do_something_with(val)
 //   }
-func (v *baseStream) MaxCmp(f LessThanCmpFunc) Optional {
+func (v *baseStream) MaxCmp(f interface{}) Optional {
+	cmpf := toLessThanCmpFunc(f)
 	return v.Reduce(func(i, j interface{}) interface{} {
-		if f(i, j) {
+		if cmpf(i, j) {
 			return j
 		} else {
 			return i
 		}
 	})
 }
-// Return stream's min, using supplied less than comparator. 
+
+// Return stream's min, using supplied less than comparator.
 // Note since stream might be empty, the value is Optional.
-// Caller must use 
+// Caller must use
 //   val, ok := result.Value()
 //   if ok {
 //     do_something_with(val)
 //   }
-func (v *baseStream) MinCmp(f LessThanCmpFunc) Optional {
+func (v *baseStream) MinCmp(f interface{}) Optional {
+	cmpf := toLessThanCmpFunc(f)
 	return v.Reduce(func(i, j interface{}) interface{} {
-		if f(i, j) {
+		if cmpf(i, j) {
 			return i
 		} else {
 			return j
@@ -442,9 +448,10 @@ func (v *mapIterWrapper) Next() (interface{}, bool) {
 	}
 }
 
-func (v *baseStream) Map(f MapFunc) Stream {
+func (v *baseStream) Map(f interface{}) Stream {
+	mf := toMapFunc(f)
 	iter := v.src
-	dest := &mapIterWrapper{iter, f}
+	dest := &mapIterWrapper{iter, mf}
 	return &baseStream{dest, nil}
 }
 
@@ -560,15 +567,17 @@ func (v *baseStream) Count() int {
 	return count
 }
 
-func (v *baseStream) Each(f MapCallFunc) {
+func (v *baseStream) Each(f interface{}) {
+	mf := toMapCallFunc(f)
 	for val, ok := v.src.Next(); ok; val, ok = v.src.Next() {
-		f(val)
+		mf(val)
 	}
 }
 
-func (v *baseStream) Filter(f PredictFunc) Stream {
+func (v *baseStream) Filter(f interface{}) Stream {
+	pf := toPredictFunc(f)
 	iter := v.src
-	dest := &filterIterWrapper{iter, f}
+	dest := &filterIterWrapper{iter, pf}
 	return &baseStream{dest, nil}
 }
 
@@ -603,14 +612,15 @@ func NewOptional(val interface{}) Optional {
 	return &baseOptional{val, true}
 }
 
-func (v *baseStream) Reduce(f ReduceFunc) Optional {
+func (v *baseStream) Reduce(f interface{}) Optional {
+	rf := toReduceFunc(f)
 	last_val, ok := v.src.Next()
 	if !ok {
 		return NewEmptyOptional()
 	}
 
 	for nv, ok := v.src.Next(); ok; nv, ok = v.src.Next() {
-		last_val = f(last_val, nv)
+		last_val = rf(last_val, nv)
 	}
 	return NewOptional(last_val)
 }
@@ -763,12 +773,13 @@ func (v *peekIter) Next() (interface{}, bool) {
 		return next, ok
 	}
 }
-func (v *baseStream) Peek(f MapCallFunc) Stream {
-	return &baseStream{&peekIter{v.src, f}, nil}
+func (v *baseStream) Peek(f interface{}) Stream {
+	mcf := toMapCallFunc(f)
+	return &baseStream{&peekIter{v.src, mcf}, nil}
 }
 
 // Create a stream from a set of values.
-// e.g. 
+// e.g.
 //   stream.Of(1,2,3,4,5).Sum().Value() => 15, true
 // 15 is the result, true means the optional actually have a value
 //   stream.Of().Sum().Value() => nil, false
@@ -776,4 +787,244 @@ func (v *baseStream) Peek(f MapCallFunc) Stream {
 // is non-existent
 func Of(vars ...interface{}) Stream {
 	return FromIterator(NewArrayIterator(vars))
+}
+
+func toLessThanCmpFunc(arg interface{}) LessThanCmpFunc {
+	// arg must be a argument
+	fv := reflect.ValueOf(arg)
+	ft := reflect.TypeOf(arg)
+
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+
+	if ft.NumIn() != 2 {
+		panic("Can't convert to less cmp func with numin != 2")
+	}
+	
+	if ft.NumOut() < 1 {
+		panic("Can't convert to less cmp func func with numout < 1")
+	}
+
+	if ft.Out(0).Kind() != reflect.Bool {
+		panic("First return type must be boolean for less cmp func")
+	}
+
+	return func(arg1 interface{}, arg2 interface{}) bool {
+		args := make([]reflect.Value, 2)
+		args[0] = reflect.ValueOf(arg1)
+		args[1] = reflect.ValueOf(arg2)
+		var rv []reflect.Value
+		if ft.IsVariadic() {
+			rv = fv.CallSlice(args)
+		} else {
+			rv = fv.Call(args)
+		}
+		return rv[0].Bool()
+	}
+}
+
+func toVoidFunc(args ...interface{}) VoidFunc {
+	if len(args) < 1 {
+		return func() {}
+	}
+	fv := reflect.ValueOf(args[0])
+	argsV := toValues(args[1:])
+	ft := reflect.TypeOf(args[0])
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+
+	return func() {
+		//fmt.Println("Args0 =", args[0])
+		//fmt.Println("Arguments are:", args[1:])
+		if ft.IsVariadic() {
+
+			//fmt.Println("Calling slice")
+			fv.CallSlice(argsV)
+		} else {
+			//fmt.Println("Calling normal")
+			//fmt.Println(argsV[0])
+			fv.Call(argsV)
+		}
+	}
+}
+
+func toReduceFunc(arg interface{}) ReduceFunc {
+	// arg must be a argument
+	fv := reflect.ValueOf(arg)
+	ft := reflect.TypeOf(arg)
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+	if ft.NumIn() != 2 {
+		panic("Can't convert to reduce func with numin != 2")
+	}
+	if ft.NumOut() < 1 {
+		panic("Can't conver to reduce func with numout < 1")
+	}
+	return func(arg1 interface{}, arg2 interface{}) interface{} {
+		args := make([]reflect.Value, 2)
+		args[0] = reflect.ValueOf(arg1)
+		args[1] = reflect.ValueOf(arg2)
+		var rv []reflect.Value
+		if ft.IsVariadic() {
+			rv = fv.CallSlice(args)
+		} else {
+			rv = fv.Call(args)
+		}
+		rvi := toInterfaces(rv)
+		return rvi[0]
+	}
+
+}
+
+func toPredictFunc(arg interface{}) PredictFunc {
+	// arg must be a argument
+	fv := reflect.ValueOf(arg)
+	ft := reflect.TypeOf(arg)
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+	if ft.NumIn() != 1 {
+		panic("Can't convert to predict func with numin != 1")
+	}
+	if ft.NumOut() < 1 {
+		panic("Can't conver to predict func with numout < 1")
+	}
+
+	if ft.Out(0).Kind() != reflect.Bool {
+		panic("First return type must be boolean for predict func")
+	}
+
+	return func(arg interface{}) bool {
+		args := make([]reflect.Value, 1)
+		args[0] = reflect.ValueOf(arg)
+		var rv []reflect.Value
+		if ft.IsVariadic() {
+			rv = fv.CallSlice(args)
+		} else {
+			rv = fv.Call(args)
+		}
+		return rv[0].Bool()
+	}
+
+}
+func toMapFunc(arg interface{}) MapFunc {
+	// arg must be a argument
+	fv := reflect.ValueOf(arg)
+	ft := reflect.TypeOf(arg)
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+	if ft.NumIn() != 1 {
+		panic("Can't convert to map func with numin != 1")
+	}
+	if ft.NumOut() < 1 {
+		panic("Can't conver to map func with numout < 1")
+	}
+	return func(arg interface{}) interface{} {
+		args := make([]reflect.Value, 1)
+		args[0] = reflect.ValueOf(arg)
+		var rv []reflect.Value
+		if ft.IsVariadic() {
+			rv = fv.CallSlice(args)
+		} else {
+			rv = fv.Call(args)
+		}
+		rvi := toInterfaces(rv)
+		return rvi[0]
+	}
+}
+
+func toMapCallFunc(arg interface{}) MapCallFunc {
+	// arg must be a argument
+	fv := reflect.ValueOf(arg)
+	ft := reflect.TypeOf(arg)
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+	if ft.NumIn() != 1 {
+		panic("Can't convert to map call func with numin != 1")
+	}
+	return func(arg interface{}) {
+		args := make([]reflect.Value, 1)
+		args[0] = reflect.ValueOf(arg)
+		if ft.IsVariadic() {
+			fv.CallSlice(args)
+		} else {
+			fv.Call(args)
+		}
+	}
+}
+
+func toGenFunc(arg interface{}) GenFunc {
+	// arg must be a argument
+	fv := reflect.ValueOf(arg)
+	ft := reflect.TypeOf(arg)
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+	if ft.NumIn() != 0 {
+		panic("Can't convert to generate func with numin != 0")
+	}
+	if ft.NumOut() < 1 {
+		panic("Can't conver to generate func with numout < 1")
+	}
+	return func() interface{} {
+		args := make([]reflect.Value, 0)
+		var rv []reflect.Value
+		if ft.IsVariadic() {
+			rv = fv.CallSlice(args)
+		} else {
+			rv = fv.Call(args)
+		}
+		rvi := toInterfaces(rv)
+		return rvi[0]
+	}
+}
+
+func toFunc(args ...interface{}) func() []interface{} {
+	if len(args) < 1 {
+		return func() []interface{} {
+			return nil
+		}
+	}
+	fv := reflect.ValueOf(args[0])
+	argsV := toValues(args[1:])
+	ft := reflect.TypeOf(args[0])
+	if ft.Kind() != reflect.Func {
+		panic("Can't convert if arg isn't a function")
+	}
+	return func() []interface{} {
+		//fmt.Println("Args0 =", args[0])
+		//fmt.Println("Arguments are:", args[1:])
+		if ft.IsVariadic() {
+			//fmt.Println("Calling slice")
+			rv := fv.CallSlice(argsV)
+			return toInterfaces(rv)
+		} else {
+			//fmt.Println("Calling normal")
+			//fmt.Println(argsV[0])
+
+			rv := fv.Call(argsV)
+			return toInterfaces(rv)
+		}
+	}
+}
+
+func toInterfaces(args []reflect.Value) []interface{} {
+	result := make([]interface{}, len(args))
+	for idx, v := range args {
+		result[idx] = v.Interface()
+	}
+	return result
+}
+
+func toValues(args []interface{}) []reflect.Value {
+	result := make([]reflect.Value, len(args))
+	for idx, v := range args {
+		result[idx] = reflect.ValueOf(v)
+	}
+	return result
 }

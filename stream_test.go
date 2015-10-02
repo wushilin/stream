@@ -5,8 +5,19 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"reflect"
 )
 
+func TestFuncConvert(*testing.T) {
+	f := toVoidFunc(toupper, reflect.ValueOf("set").Interface())
+	f()
+	
+	f1 := toFunc(func(i, j int) (int, int, int){
+			return i + j, i, j
+		}, 4, 5)
+	vals := f1()
+	fmt.Println(vals)
+}
 func TestStream(*testing.T) {
 	slice := make([]string, 300)
 	st, err := stream.FromFileLines("stream.go")
@@ -121,3 +132,4 @@ func toupper(i interface{}) interface{} {
 func isLength5(i interface{}) bool {
 	return len(i.(string)) == 5
 }
+
