@@ -4,21 +4,22 @@ import (
 	_ "fmt"
 	"reflect"
 )
+
 //Defined a iterator for generic purpose
 type Iterator interface {
 	/*
-	Next() returns the next element. If an element is available, val is the element and ok is true.
-	If an element is not available, val is nil, and ok is set as false
-	A common way of iterating:  
-	for next, ok := iter.Next(); ok; next, ok = iter.Next() {
-	   do_some_thing_with(next)
-	}
+		Next() returns the next element. If an element is available, val is the element and ok is true.
+		If an element is not available, val is nil, and ok is set as false
+		A common way of iterating:
+		for next, ok := iter.Next(); ok; next, ok = iter.Next() {
+		   do_some_thing_with(next)
+		}
 	*/
 	Next() (val interface{}, ok bool)
 }
 
-/* 
-Utilty struct for array iteration. 
+/*
+Utilty struct for array iteration.
 Note: Not thread safe
 */
 type arrayIterator struct {
@@ -27,8 +28,8 @@ type arrayIterator struct {
 	length int
 }
 
-/* 
-Return a new iterator based on array. target must be an array, 
+/*
+Return a new iterator based on array. target must be an array,
 or a slice, or a pointer to an array, or a pointer to a slice
 It can't be pointer to pointer to an array/slice
 Note: Not thread safe
@@ -60,7 +61,7 @@ type MapEntry struct {
 	Value interface{}
 }
 
-/* 
+/*
 Utility struct for map key iteration
 
   Note: Not thread safe
@@ -72,7 +73,7 @@ type MapKeyIterator struct {
 	length int
 }
 
-/* 
+/*
 Implements Iterator. Returns a map key on each Next() call
 All map keys are obtained when iterator is constructed. Thus no new key added after construction
 will be returned.
@@ -101,7 +102,7 @@ type MapValueIterator struct {
 // Implements Iterator. Returns a map value on each Next() call
 // All map keys are obtained when iterator is constructed. Thus no new key's value added after construction
 // will be returned. However, values modified after iteration construction, new value will be returned
-//   Note: Not thread safe 
+//   Note: Not thread safe
 func (v *MapValueIterator) Next() (result interface{}, ok bool) {
 	if v.index == v.length {
 		return nil, false
@@ -115,7 +116,7 @@ func (v *MapValueIterator) Next() (result interface{}, ok bool) {
 
 // Utility struct for Map Entry iteration.
 // All map keys are obtained when iterator is constructed. Thus no new key's value added after construction
-// will be returned. However, values modified after iteration construction, new  key/value will be returned 
+// will be returned. However, values modified after iteration construction, new  key/value will be returned
 //   Note: Not thread safe
 type MapEntryIterator struct {
 	target reflect.Value
@@ -138,7 +139,7 @@ func (v *MapEntryIterator) Next() (result interface{}, ok bool) {
 }
 
 // Utility struct to for channel iteration
-// Iterate through channels requires explicit channel closure. Failing to do so will result 
+// Iterate through channels requires explicit channel closure. Failing to do so will result
 // indefinite waiting.
 //   Note: thread safe
 type ChannelIterator struct {
@@ -159,16 +160,16 @@ func (v *ChannelIterator) Next() (result interface{}, ok bool) {
 // Collect at most count elements from Iterator object.
 // Returns a slice of object collected.  If count is 0, empty slice is returned.
 // If count is less than 0, Maximum number of objects are collected (similar to Integer.MAX_VALUE in java)
-//   Note: Collected objects might be less than count if Iterator reached end 
+//   Note: Collected objects might be less than count if Iterator reached end
 //   Note: Not thread safe
-func CollectN(iter Iterator, count int) ([]interface{}) {
+func CollectN(iter Iterator, count int) []interface{} {
 	result := make([]interface{}, 0)
 	if count == 0 {
 		return result
 	}
 	for next, ok := iter.Next(); ok; next, ok = iter.Next() {
 		result = append(result, next)
-		if len(result) >= count && count > 0{
+		if len(result) >= count && count > 0 {
 			return result
 		}
 	}
@@ -180,13 +181,13 @@ func CollectAll(iter Iterator) []interface{} {
 	return CollectN(iter, -1)
 }
 
-// Create Iterator on a channel. 
+// Create Iterator on a channel.
 // Target must be a channel
 //   Note: Channel sender need to close channel or Iterator's last Next() call will hang forever
 //   Multiple Iterator on same channel is possible since each Next() call will receive from the channel
 func NewChannelIterator(target interface{}) *ChannelIterator {
 	v := reflect.ValueOf(target)
-	
+
 	return &ChannelIterator{v}
 }
 

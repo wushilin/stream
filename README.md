@@ -1,15 +1,16 @@
-# golib
+# stream
 
 ## Install
 ```
 go get github.com/wushilin/stream
-go get github.com/wushilin/parallel
 ```
 
 ## Documentation
+```
 $ godoc -http=":16666"
 
-Browse http://localhost:1666
+Browse http://localhost:16666
+```
 
 ## Usage
 
@@ -20,7 +21,7 @@ Browse http://localhost:1666
 ```
 import "github.com/wushilin/stream"
 
-var s Stream = stream.Range(0, 10)
+var s Stream = stream.Range(0, 10) // a stream (which is lazy), that will contain [0..10)
 var sum Optional = s.Filter(func(i interface{}) bool {
 	return i.(int) >= 5
 }).Sum()
