@@ -51,7 +51,7 @@ s := stream.Generate(func() int {
 
 // Create stream from iterative function
 s := stream.Iterate(1, func(i int) int {
-  return 1 + 2
+  return i + 2
 })
 // This will generate a stream of even integers, starting from 1.
 
