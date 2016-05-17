@@ -15,7 +15,7 @@ Browse http://localhost:16666
 ## Usage
 
 ### Stream API
-
+What is a stream? Stream is a concept of collection of items, from various sources.
 #### Creating Stream
 There are couple of ways of creating streams. Please read throught code below.
 ```go
