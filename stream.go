@@ -1029,16 +1029,22 @@ func toValues(args []interface{}) []reflect.Value {
 	return result
 }
 
-type numberedItem struct {
+type NumberedItem struct {
   Index int
   Item interface{}
 }
 
+// Allow stream to be accessed with Index. 
+// Usage: 
+// new_stream := stream.WithIndex(stream.Of("1","2","3"))
+// new_stream.Each(func(i stream.NumberedItem) {
+//    fmt.Println(i.Index, i.Item)
+// })
 func WithIndex(in Stream) Stream {
   index := 0
-  return in.Map(func(i interface{}) numberedItem {
+  return in.Map(func(i interface{}) NumberedItem {
     new_index := index
     index++
-    return numberedItem{new_index, i}
+    return NumberedItem{new_index, i}
   })
 }
