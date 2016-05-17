@@ -1040,6 +1040,16 @@ type NumberedItem struct {
 // new_stream.Each(func(i stream.NumberedItem) {
 //    fmt.Println(i.Index, i.Item)
 // })
+// This is actually implemented using the Map function internally.
+// func WithIndex(in Stream) Stream {
+//   index := 0
+//   return in.Map(func(i interface{}) NumberedItem {
+//     new_index := index
+//     index++
+//     return NumberedItem{new_index, i}
+//   })
+// }
+
 func WithIndex(in Stream) Stream {
   index := 0
   return in.Map(func(i interface{}) NumberedItem {
