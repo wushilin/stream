@@ -16,152 +16,247 @@ Browse http://localhost:16666
 
 ### Stream API
 
-#### Stream from slice/array
-
+#### Creating Stream
+There are couple of ways of creating streams. Please read throught code below.
 ```go
 import "github.com/wushilin/stream"
 
-var s Stream = stream.Range(0, 10) // a stream (which is lazy), that will contain [0..10)
-var sum Optional = s.Filter(func(i interface{}) bool {
-	return i.(int) >= 5
-}).Sum()
-// Note that sum is optional since stream might be empty.
-// Be sure to get sum.Value() => return the value and a bool
-// indicating the value's presense
-fmt.Println(sum.OrValue("There is no element in the stream"))
+// create stream from static list
+s := stream.Of("1","2","3")
+
+// Create stream from slice
+s := stream.FromArray([]string{"1","2","3"})
+
+// Create stream from a file
+s := stream.FromFileLines("/tmp/input.txt")
+// Note that s.Close() must be called for file streams - it will close 
+// the file handle
+
+// Create stream from a receiver channel
+c := make(chan int)
+s := stream.FromChannel(c)
+// Note here the other go routines must send to the channel and close the channel
+
+// Create stream from a generator function
+s := stream.Generate(func() int {
+  return 5
+})
+// This is pretty much useless, it returns a infinite stream of integer 5.
+// But you can combine it with other features like Limit, Skip, and Sum
+
+s := stream.Generate(func() int {
+  return rand.Intn(12)
+})
+// This will create a infinite stream of random integers betwee 0 and 12
+
+// Create stream from iterative function
+s := stream.Iterate(1, func(i int) int {
+  return 1 + 2
+})
+// This will generate a stream of even integers, starting from 1.
+
+seed := 1
+fibonaci_func := func(i int) int {
+    result := i + seed
+    seed = i
+    return result
+}
+stream.Iterate(1, fibonaci).Limit(30)
+// This creates a stream of Fibonacci numbers, limited to first 30 items
+
+// Create stream from a range
+s := stream.Range(1, 100)
+fmt.Println(s.Sum())
+// You will get 4950, true <- true means there is a sum for retrieval
+
+// Create stream from Iterator
+// dummy type implements Iterator, which has a Next() function 
+// Next() function returns the next value and whether the value exists.
+type dummy struct {
+}
+
+func (v dummy) Next() (interface{}, bool) {
+  return 5, true
+}
+
+s := stream.FromIterator(dummy{}) // this is same as static generator function
+
+// Create stream from Map keys and values
+mp := make(map[string]string)
+mp["1"] = "Jessy"
+mp["2"] = "Steve"
+sk := stream.FromMapKeys(mp)
+sv := stream.FromMapValues(mp)
+se := stream.FromMapEntries(mp)
 ```
 
-Other typical scenarios:
+#### Stream operators
+##### Concat - consumes first stream first, when exhausted, consume the second
+```go
+s1 := stream.Range(0,5)
+s2 := stream.Range(5,10)
+s3 := s1.Concat(s2) 
+// s3 is the same as stream.Range(0,10)
+// this applies for all kinds of streams, not only ranges
+```
+##### Map - Map a transformation to existing stream
+```go
+s1 := stream.Range(0, 5) // this stream, when consumed, will produce 0,1,2,3,4
+s2 := s1.Map(func(i int) int {
+  return i + 5
+})
+// s2, when consumed, will consume s1, and produce 5,6,7,8,9
+s3 := s2.Map(func(i int) string {
+  return fmt.Sprintf("Student number %d", i)
+}
+// s3, when consumed, will consume s2 and produce 
+// "Student number 5", "Student number 6",...,"Student number 9"
+```
+
+##### Reduce - reduce a stream to a single object
+The result is a stream.Optional object. The optional object has a Value()
+function to retrieve its value
+```go
+s1 := stream.Of(1,2,3,4,5)
+sum := 0
+reduce_func := func(i,j int) int { return i + j }
+fmt.Println(s1.Reduce(reduce_func).Value())
+// This will produce 15, true (15 is the result, true means there is a result)
+// stream.Range(5, -1).Reduce(reduce_func).Value() will produce nil, false
+// since stream.Range(5, -1) contains no elements.
+```
+##### Limit - limit the number of elements to emit. 
+The remaining items of upper stream is not consumed
+```go
+s1 := stream.Generate(func() int { return 5 }) // s1 is infinite number of 5s
+s2 := s1.Limit(20)
+fmt.Println(s2.Sum().Value()) // will produce 100, true
+```
+
+##### Count - consume all elements and return the count
+```go
+fmt.Println(stream.Of("1","2").Count()) // produces 2
+fmt.Println(stream.Range(0,100).Count()) // produces 100
+fmt.Println(stream.Generate(func() int{ return 5 })) // never returns, infinite loop
+```
+##### Filter - filter elements based on predict
+```go
+s1 := stream.FromFileLines("/tmp/test.txt")
+defer s1.Close()
+s2 := s1.Filter(func(line string) bool {
+  return len(line) < 100
+})
+// s2 is stream of strings, where the lines are shorter than 100 characters
+```
+
+##### Each - do a func for each of elements, doesn't expect return result
+```go
+stream.Range(0, 5).Each(func(i int) {
+    fmt.Println(i, "* 2 =", i*2)
+})
+// Produces
+// 0 * 2 = 0
+// 1 * 2 = 2
+// ...
+// 4 * 2 = 8
+```
+##### Close - close the stream, and trigger OnClose function
+Streams by default, has no close handler. so Close() does nothing. 
+The only one has a default close handler is the stream.FromFileLines("filename")
+When it is closed, the file gets closed. 
+You can attach a close handler, so the handler is called when stream is closed.
+
+```go
+s1 := stream.Range(0, 100).OnClose(func() {
+  fmt.Println("I am closed, good job man, I will call some other functions")
+}).OnClose(func() {
+  fmt.Println("I am closing some database connection")
+})
+defer s1.Close()
+// Then you will see the two OnClose functions are called in order they are attached. (earlier OnClose func got called first).
 
 ```
-	slice := make([]string, 300)
-	// Read file as stream - you need to close the stream
-	st, err := stream.FromFileLines("stream.go")
-	if err != nil {
-		panic(err)
-	}
-	// Collect first 300 lines 
-	// (note this will return an int on elements collected)
-	st.CollectTo(slice)
+##### Iterator - return iterator of the stream
+streams are implemented using iterators. So it simply returns the underlying iterator
+```go
+iter := stream.Range(0,100).Iterator()
+for val, has_next := iter.Next(); val, has_next = iter.Next(); has_next {
+  // do something
+}
+```
 
-	// Attach a close handler for the stream.
-	st = st.OnClose(func() {
-		fmt.Println("Doing other things too")
-	})
-	// handlers are called in the order they are attached
-	st = st.OnClose(func() {
-		fmt.Println("Don't forget not to create loop!")
-	})
-	// Close stream. Typically only required for file IO
-	st.Close()
+##### Skip - skip N elements
+```go
+s1 := stream.Range(0, 100).Skip(50) // 50, 51, 52,...., 99
+```
 
-	// Make stream from an array/slice
-	st = stream.FromArray(slice)
+##### CollectTo - collect elements to slice, up to stream's availability and buffer capacity
+```go
+buffer := make([]int, 100)
+collect_count := stream.Range(0, 100000).CollectTo(buffer)
+// collect_count will be 100, and buffer will contain 0~99
 
-	// Count elements in stream. Note this will consume stream
-	fmt.Println(st.Count())
+collect_count1 := stream.Range(0,1).CollectTo(buffer)
+// collect_count1 will be 1, and buffer will contain 0. Rest of values untouched
+```
 
-	st1 := stream.FromArray(slice)
-	// Do a func for each of the elements
-	st1.Each(print)
+##### MaxCmp - Do reduce use the less comparator to find max value
+```go
+max_cmp_func := func(i, j int) bool {
+  return i < j
+}
+fmt.Println(stream.Range(0, 100).MaxCmp(max_cmp_func)) // 99, true
+```
 
-	fmt.Println("Testing filter")
-	st2 := stream.FromArray(slice)
-	// Lazy filter the stream with a predict. LAZY means stream is not consumed
-	st2.Filter(isLength5).Each(print)
+##### MinCmp - Do reduce using less comparator to find min value
+```go
+max_cmp_func := func(i, j int) bool {
+  return i < j
+}
+fmt.Println(stream.Range(0, 100).MinCmp(max_cmp_func)) // 99, true
+```
 
-	fmt.Println("Testing limit")
-	st3 := stream.FromArray(slice)
-	// Limit limits the elements in stream. Again, it is LAZY. 
-	// It won't consume stream
-	st3.Limit(4).Each(print)
+##### Max - do natural comparison max value. Builtin support for all numbers and strings
+```go
+fmt.Println(stream.Range(0, 100).Max().Value()) // 99, true
+```
 
-	fmt.Println("Testing Map")
-	st4 := stream.FromArray(slice)
-	// Map stream elements to a transform function and return the result
-	// as a stream
-	st4.Map(toupper).Each(print)
+##### Min - do natural comparison min value. Builtin support for all numbers and strings
+```go
+fmt.Println(stream.Of(1.1, 1.2, 1.3).Min().Value()) // 1.1, true
+```
 
-	fmt.Println("Testing reduce")
-	st5 := stream.FromArray(slice)
-	// Reduce a stream with reduce function
-	fmt.Println(st5.Reduce(concat))
+##### Peek - return a stream that contains same element, but attach a trigger on consumption
+```go
+count := 0
+fmt.Println(stream.Range(0, 5).Peek(func(i int) {
+  count = count + i
+}).Count())
+fmt.Println(count)
+// Produces 5 (the count), 10 (the sum)
+```
 
-	fmt.Println("Test generator")
-	// Generate an infinite stream
-	sum := stream.Generate(func() interface{} {
-		return 5
-	// You can limit on infinite stream, then apply add as reduction function
-	}).Limit(2000000).Reduce(add)
-	fmt.Println("Sum is", sum, "which should be 10000000")
+##### WithIndex - index the number when consuming
+```go
+stream.WithIndex(stream.Range(6, 100)).Each(func(i stream.NumberedItem) {
+  fmt.Println("Object index is:", i.Index)
+  fmt.Println("Object is:", i.Item)
+})
+```
 
-	fmt.Println("Testing fibonacci generator again")
-	seed := 1
-	fibonaci := func(i interface{}) interface{} {
-		ii := i.(int)
-		result := ii + seed
-		seed = ii
-		return result
-	}
-	// You can use Iterate to generate a stream of fibonacci numbers.
-    // Again, it is LAZY!
-	stream.Iterate(1, fibonaci).Limit(30).Each(print)
+##### SendTo - send stream to a channel
+```go
+destc := make(chan int)
+done := make(chan bool)
+go func() {
+    for next_int := range(destc) {
+      fmt.Println("Received:", next_int)
+    }
+    done <- true
+}()
 
-	fmt.Println("Testing sequence generator again")
-	add1 := func(i interface{}) interface{} {
-		ii := i.(int)
-		return ii + 1
-	}
-	// You can use init value + iterative function to generate stream too
-	stream.Iterate(1, add1).Limit(30).Each(print)
-
-	fmt.Println("Testing range")
-	// You can use Range to create stream too! Note high is not returned
-	fmt.Println("0++30 = ", stream.Range(0, 30).Reduce(stream.SumInt))
-
-	fmt.Println("Testing skip")
-	// Count elements! You can skip elements too!
-	fmt.Println(stream.Range(0, 30).Skip(50).Count())
-
-	fmt.Println("Testing Of and filter")
-	// You can create stream using the arguments
-	stream.Of("a", "b", "c").Filter(func(a interface{}) bool {
-		return a.(string) == "a"
-	}).Each(print)
-
-	fmt.Println("Testing peek")
-	// You can add peek function, return the same stream, but on consumption
-    // the peek function is called
-	// You can also use Max() to get max value if elements are numbers/strings
-	// Note this returns an optional
-	fmt.Println(stream.Range(1, 10).Peek(print).Max()) 
-
-	fmt.Println("Testing sum")
-	// You can use Sum() too! Note that the sum return an Optional
-	fmt.Println(stream.Range(1, 100).Sum().Value())
-
-	// You can collect to slice from string. The max
-    // to collect is actually the target's cap
-	target := make([]int, 30)
-	n := stream.Range(0, 20).CollectTo(target)
-	fmt.Println(n)
-
-	// You can create stream from Channel too!
-    // You can send all elements from stream to channel too!
-	fmt.Println("Testing channel")
-	sourcec := make(chan int)
-	done := make(chan bool)
-	go func() {
-		news := stream.FromChannel(sourcec)
-		print(news.Skip(5).Sum().OrValue("No value returned"))
-		done <- true
-	}()
-	stream.Range(0, 30).SendTo(sourcec)
-	// Be sure you close this, otherwise stream will believe there 
-	// are more elements so any attempt to read more than provided 
-	// value, will haang there.
-	close(sourcec)
-	<-done
-``` 
-
-
+stream.Range(0, 100).SendTo(destc)
+close(destc)
+<- done
+// This will send 0~99 (100 numbers) to the channel for another go routine to consume.
+```
