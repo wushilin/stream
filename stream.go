@@ -801,7 +801,7 @@ func toLessThanCmpFunc(arg interface{}) LessThanCmpFunc {
 	if ft.NumIn() != 2 {
 		panic("Can't convert to less cmp func with numin != 2")
 	}
-	
+
 	if ft.NumOut() < 1 {
 		panic("Can't convert to less cmp func func with numout < 1")
 	}
@@ -1027,4 +1027,18 @@ func toValues(args []interface{}) []reflect.Value {
 		result[idx] = reflect.ValueOf(v)
 	}
 	return result
+}
+
+type numberedItem struct {
+  Index int
+  Item interface{}
+}
+
+func WithIndex(in Stream) Stream {
+  index := 0
+  return in.Map(func(i interface{}) numberedItem {
+    new_index := index
+    index++
+    return numberedItem{new_index, i}
+  })
 }
