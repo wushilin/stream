@@ -18,7 +18,7 @@ Browse http://localhost:16666
 
 #### Stream from slice/array
 
-```
+```go
 import "github.com/wushilin/stream"
 
 var s Stream = stream.Range(0, 10) // a stream (which is lazy), that will contain [0..10)
