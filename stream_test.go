@@ -1,135 +1,134 @@
 package stream
 
 import (
-	stream "."
 	"fmt"
 	"strings"
 	"testing"
-	"reflect"
 )
 
-func TestFuncConvert(*testing.T) {
-	f := toVoidFunc(toupper, reflect.ValueOf("set").Interface())
-	f()
-	
-	f1 := toFunc(func(i, j int) (int, int, int){
-			return i + j, i, j
-		}, 4, 5)
-	vals := f1()
-	fmt.Println(vals)
-}
 func TestStream(*testing.T) {
 	slice := make([]string, 300)
-	st, err := stream.FromFileLines("stream.go")
+	st0, err := FromFileLines("stream.go")
 	if err != nil {
 		panic(err)
 	}
-	st.CollectTo(slice)
-	st = st.OnClose(func() {
+	st0.CollectTo(slice)
+	st0 = st0.OnClose(func() {
 		fmt.Println("Doing other things too")
 	})
-	st = st.OnClose(func() {
+	st0 = st0.OnClose(func() {
 		fmt.Println("Don't forget not to create loop!")
 	})
+	st := Map(st0, func(i string) string { return i })
 	st.Close()
 
-	st = stream.FromArray(slice)
+	st = FromArray(slice)
 	fmt.Println(st.Count())
 
-	st1 := stream.FromArray(slice)
-	st1.Each(print)
+	st1 := FromArray(slice)
+	st1.Each(printString)
 
 	fmt.Println("Testing filter")
-	st2 := stream.FromArray(slice)
-	st2.Filter(isLength5).Each(print)
+	st2 := FromArray(slice)
+	st2.Filter(isLength5).Each(printString)
 
 	fmt.Println("Testing limit")
-	st3 := stream.FromArray(slice)
-	st3.Limit(4).Each(print)
+	st3 := FromArray(slice)
+	st3.Limit(4).Each(printString)
 
 	fmt.Println("Testing Map")
-	st4 := stream.FromArray(slice)
-	st4.Map(toupper).Each(print)
+	st4 := FromArray(slice)
+	Map(st4, toupper).Each(printString)
 
 	fmt.Println("Testing reduce")
-	st5 := stream.FromArray(slice)
+	st5 := FromArray(slice)
 	fmt.Println(st5.Reduce(concat))
 
-	fmt.Println("Test generator")
-	sum := stream.Generate(func() interface{} {
+	fmt.Println("Testing generator")
+	sum := Generate(func() int {
 		return 5
 	}).Limit(2000000).Reduce(add)
 	fmt.Println("Sum is", sum, "which should be 10000000")
 
 	fmt.Println("Testing fibonacci generator again")
 	seed := 1
-	fibonaci := func(i interface{}) interface{} {
-		ii := i.(int)
+	fibonaci := func(i int) int {
+		ii := i
 		result := ii + seed
 		seed = ii
 		return result
 	}
-	stream.Iterate(1, fibonaci).Limit(30).Each(print)
+	Iterate(1, fibonaci).Limit(30).Each(printInt)
 
 	fmt.Println("Testing sequence generator again")
 
-	add1 := func(i interface{}) interface{} {
-		ii := i.(int)
+	add1 := func(i int) int {
+		ii := i
 		return ii + 1
 	}
-	stream.Iterate(1, add1).Limit(30).Each(print)
+	Iterate(1, add1).Limit(30).Each(printInt)
 
 	fmt.Println("Testing range")
-	fmt.Println("0++30 = ", stream.Range(0, 30).Reduce(stream.SumInt))
+	fmt.Println("0++30 = ", Sum(Range(0, 30)))
 
 	fmt.Println("Testing skip")
-	fmt.Println(stream.Range(0, 30).Skip(50).Count())
+	fmt.Println(Range(0, 30).Skip(50).Count())
 
 	fmt.Println("Testing Of and filter")
-	stream.Of("a", "b", "c").Filter(func(a interface{}) bool {
-		return a.(string) == "a"
-	}).Each(print)
+	Of("a", "b", "c").Filter(func(a string) bool {
+		return a == "a"
+	}).Each(printString)
 
-	fmt.Println("Testing peek")
-	fmt.Println(stream.Range(1, 10).Peek(print).Max())
+	fmt.Println("Testing peek & Max, should be 9")
+	fmt.Println(Range(1, 10).Peek(printInt).MaxCmp(func(i, j int) int {
+		if i < j {
+			return -1
+		}
+		if i == j {
+			return 0
+		}
+		return 1
+	}))
 
 	fmt.Println("Testing sum")
-	fmt.Println(stream.Range(1, 100).Sum().Value())
+	fmt.Println(Sum(Range(1, 100)))
 
 	target := make([]int, 30)
-	n := stream.Range(0, 20).CollectTo(target)
+	n := Range(0, 20).CollectTo(target)
 	fmt.Println(n)
 
 	fmt.Println("Testing channel")
 	sourcec := make(chan int)
 	done := make(chan bool)
 	go func() {
-		news := stream.FromChannel(sourcec)
-		print(news.Skip(5).Sum().OrValue("No value returned"))
+		news := FromChannel(sourcec)
+		print(Sum(news.Skip(5)).OrValue(0))
 		done <- true
 	}()
-	stream.Range(0, 30).SendTo(sourcec)
+	Range(0, 30).SendTo(sourcec)
 	close(sourcec)
 	<-done
 }
 
-func print(i interface{}) {
+func printString(i string) {
+	fmt.Println(i)
+}
+func printInt(i int) {
 	fmt.Println(i)
 }
 
-func add(i, j interface{}) interface{} {
-	return i.(int) + j.(int)
+func add(i, j int) int {
+	return i + j
 }
 
-func concat(i, j interface{}) interface{} {
-	return i.(string) + j.(string)
+func concat(i, j string) string {
+	return i + "\\n" + j
 }
 
-func toupper(i interface{}) interface{} {
-	return strings.ToUpper(i.(string))
+func toupper(i string) string {
+	return strings.ToUpper(i)
 }
 
-func isLength5(i interface{}) bool {
-	return len(i.(string)) == 5
+func isLength5(i string) bool {
+	return len([]rune(i)) == 5
 }
-
