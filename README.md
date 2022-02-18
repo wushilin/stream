@@ -75,7 +75,7 @@ fmt.Println(s.Sum())
 type dummy struct {
 }
 
-func (v dummy) Next() (interface{}, bool) {
+func (v dummy) Next() (int, bool) {
   return 5, true
 }
 
@@ -101,8 +101,9 @@ s3 := s1.Concat(s2)
 ```
 ##### Map - Map a transformation to existing stream
 ```go
+// Due to go type system, Stream[T1].Map(func (T1) T2) => Stream[T2] won't work. We have use a static function like this unfortunately.
 s1 := stream.Range(0, 5) // this stream, when consumed, will produce 0,1,2,3,4
-s2 := s1.Map(func(i int) int {
+s2 := stream.Map(s1, func(i int) int {
   return i + 5
 })
 // s2, when consumed, will consume s1, and produce 5,6,7,8,9
@@ -218,12 +219,28 @@ fmt.Println(stream.Range(0, 100).MinCmp(max_cmp_func)) // 99, true
 
 ##### Max - do natural comparison max value. Builtin support for all numbers and strings
 ```go
-fmt.Println(stream.Range(0, 100).Max().Value()) // 99, true
+fmt.Println(stream.Range(0, 100).MaxCmp(func(i, j int) int {
+	if i < j {
+		return -1
+	}
+  if i == j {
+  	return 0
+  }
+  return 1
+}).Value()) // 99, true
 ```
 
 ##### Min - do natural comparison min value. Builtin support for all numbers and strings
 ```go
-fmt.Println(stream.Of(1.1, 1.2, 1.3).Min().Value()) // 1.1, true
+fmt.Println(stream.Of(1.1, 1.2, 1.3).MinCmp(func(j, j int) int {
+  if i < j {
+    return -1
+  }
+  if i == j {
+    return 0
+  }
+  return 1
+}).Value()) // 1.1, true
 ```
 
 ##### Peek - return a stream that contains same element, but attach a trigger on consumption
