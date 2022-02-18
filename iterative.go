@@ -2,11 +2,10 @@ package stream
 
 import (
 	_ "fmt"
-	"reflect"
 )
 
 //Defined a iterator for generic purpose
-type Iterator interface {
+type Iterator[T any] interface {
 	/*
 		Next() returns the next element. If an element is available, val is the element and ok is true.
 		If an element is not available, val is nil, and ok is set as false
@@ -15,15 +14,15 @@ type Iterator interface {
 		   do_some_thing_with(next)
 		}
 	*/
-	Next() (val interface{}, ok bool)
+	Next() (result T, ok bool)
 }
 
 /*
 Utilty struct for array iteration.
 Note: Not thread safe
 */
-type arrayIterator struct {
-	target reflect.Value
+type arrayIterator[T any] struct {
+	target []T
 	index  int
 	length int
 }
@@ -34,10 +33,9 @@ or a slice, or a pointer to an array, or a pointer to a slice
 It can't be pointer to pointer to an array/slice
 Note: Not thread safe
 */
-func NewArrayIterator(target interface{}) Iterator {
-	tv := reflect.Indirect(reflect.ValueOf(target))
-	length := tv.Len()
-	return &arrayIterator{tv, 0, length}
+func NewArrayIterator[T any](target []T) Iterator[T] {
+	length := len(target)
+	return &arrayIterator[T]{target, 0, length}
 }
 
 /*
@@ -45,20 +43,21 @@ Implements Iterator interface
 
   Note: Not thread safe
 */
-func (v *arrayIterator) Next() (result interface{}, ok bool) {
+func (v *arrayIterator[T]) Next() (result T, ok bool) {
 	if v.index == v.length {
-		return nil, false
+		var zv T
+		return zv, false
 	} else {
-		result = v.target.Index(v.index).Interface()
+		result := v.target[v.index]
 		v.index++
 		return result, true
 	}
 }
 
 // Map entry iteration: Just like java.util.Map.Entry class
-type MapEntry struct {
-	Key   interface{}
-	Value interface{}
+type MapEntry[K, V any] struct {
+	Key   K
+	Value V
 }
 
 /*
@@ -66,9 +65,9 @@ Utility struct for map key iteration
 
   Note: Not thread safe
 */
-type MapKeyIterator struct {
-	target reflect.Value
-	keys   []reflect.Value
+type MapKeyIterator[K comparable, V any] struct {
+	target map[K]V
+	keys   []K
 	index  int
 	length int
 }
@@ -80,21 +79,22 @@ will be returned.
 
   Note: Not thread safe
 */
-func (v *MapKeyIterator) Next() (result interface{}, ok bool) {
+func (v *MapKeyIterator[K, V]) Next() (result K, ok bool) {
 	if v.index == v.length {
-		return nil, false
+		var zv K
+		return zv, false
 	} else {
 		k := v.keys[v.index]
 		v.index++
-		return k.Interface(), true
+		return k, true
 	}
 }
 
 // Utility struct for map value iteration
 //   Note: Not thread safe
-type MapValueIterator struct {
-	target reflect.Value
-	keys   []reflect.Value
+type MapValueIterator[K comparable, V any] struct {
+	target map[K]V
+	keys   []K
 	index  int
 	length int
 }
@@ -103,14 +103,15 @@ type MapValueIterator struct {
 // All map keys are obtained when iterator is constructed. Thus no new key's value added after construction
 // will be returned. However, values modified after iteration construction, new value will be returned
 //   Note: Not thread safe
-func (v *MapValueIterator) Next() (result interface{}, ok bool) {
+func (v *MapValueIterator[K, V]) Next() (result V, ok bool) {
 	if v.index == v.length {
-		return nil, false
+		var zv V
+		return zv, false
 	} else {
 		k := v.keys[v.index]
-		result = v.target.MapIndex(k).Interface()
+		result, ok = v.target[k]
 		v.index++
-		return result, true
+		return result, ok
 	}
 }
 
@@ -118,23 +119,24 @@ func (v *MapValueIterator) Next() (result interface{}, ok bool) {
 // All map keys are obtained when iterator is constructed. Thus no new key's value added after construction
 // will be returned. However, values modified after iteration construction, new  key/value will be returned
 //   Note: Not thread safe
-type MapEntryIterator struct {
-	target reflect.Value
-	keys   []reflect.Value
+type MapEntryIterator[K comparable, V any] struct {
+	target map[K]V
+	keys   []K
 	index  int
 	length int
 }
 
 // Implements Iterator. Will return MapEntry on each call.
 //   Note: Not thread safe
-func (v *MapEntryIterator) Next() (result interface{}, ok bool) {
+func (v *MapEntryIterator[K, V]) Next() (result MapEntry[K, V], ok bool) {
 	if v.index == v.length {
-		return nil, false
+		var zv MapEntry[K, V]
+		return zv, false
 	} else {
 		k := v.keys[v.index]
-		val := v.target.MapIndex(k).Interface()
+		val := v.target[k]
 		v.index++
-		return MapEntry{k, val}, true
+		return MapEntry[K, V]{k, val}, true
 	}
 }
 
@@ -142,18 +144,19 @@ func (v *MapEntryIterator) Next() (result interface{}, ok bool) {
 // Iterate through channels requires explicit channel closure. Failing to do so will result
 // indefinite waiting.
 //   Note: thread safe
-type ChannelIterator struct {
-	target reflect.Value
+type ChannelIterator[T any] struct {
+	target chan T
 }
 
 // Implements Iterator. result will be channel's corresponding value type, requires casting
 //   Note: thread safe
-func (v *ChannelIterator) Next() (result interface{}, ok bool) {
-	val, okb := v.target.Recv()
+func (v *ChannelIterator[T]) Next() (result T, ok bool) {
+	va, okb := <-v.target
 	if okb {
-		return val.Interface(), okb
+		return va, okb
 	} else {
-		return nil, okb
+		var zv T
+		return zv, okb
 	}
 }
 
@@ -162,8 +165,8 @@ func (v *ChannelIterator) Next() (result interface{}, ok bool) {
 // If count is less than 0, Maximum number of objects are collected (similar to Integer.MAX_VALUE in java)
 //   Note: Collected objects might be less than count if Iterator reached end
 //   Note: Not thread safe
-func CollectN(iter Iterator, count int) []interface{} {
-	result := make([]interface{}, 0)
+func CollectN[T any](iter Iterator[T], count int) []T {
+	result := make([]T, 0)
 	if count == 0 {
 		return result
 	}
@@ -177,7 +180,7 @@ func CollectN(iter Iterator, count int) []interface{} {
 }
 
 // Same as CollecctN, but no limit
-func CollectAll(iter Iterator) []interface{} {
+func CollectAll[T any](iter Iterator[T]) []T {
 	return CollectN(iter, -1)
 }
 
@@ -185,41 +188,48 @@ func CollectAll(iter Iterator) []interface{} {
 // Target must be a channel
 //   Note: Channel sender need to close channel or Iterator's last Next() call will hang forever
 //   Multiple Iterator on same channel is possible since each Next() call will receive from the channel
-func NewChannelIterator(target interface{}) *ChannelIterator {
-	v := reflect.ValueOf(target)
-
-	return &ChannelIterator{v}
+func NewChannelIterator[T any](target chan T) *ChannelIterator[T] {
+	return &ChannelIterator[T]{target}
 }
 
 // Create Iterator to iterate over a map's keys.
 // Target must be a map or code may panic
 // Multiple Iterator on same map is possible
-func NewMapKeyIterator(target interface{}) *MapKeyIterator {
-	tv := reflect.Indirect(reflect.ValueOf(target))
-
-	keys := tv.MapKeys()
+func NewMapKeyIterator[K comparable, V any](target map[K]V) *MapKeyIterator[K, V] {
+	keys := make([]K, len(target))
+	var i = 0
+	for k := range target {
+		keys[i] = k
+		i++
+	}
 	length := len(keys)
-	return &MapKeyIterator{tv, keys, 0, length}
+	return &MapKeyIterator[K, V]{target, keys, 0, length}
 }
 
 // Create Iterator to iterate over a map's values.
 // Target must be a map
 // Multiple Iterator on same map is possible
-func NewMapValueIterator(target interface{}) *MapValueIterator {
-	tv := reflect.Indirect(reflect.ValueOf(target))
-
-	keys := tv.MapKeys()
+func NewMapValueIterator[K comparable, V any](target map[K]V) *MapValueIterator[K, V] {
+	keys := keys(target)
 	length := len(keys)
-	return &MapValueIterator{tv, keys, 0, length}
+	return &MapValueIterator[K, V]{target, keys, 0, length}
+}
+
+func keys[K comparable, V any](target map[K]V) []K {
+	keys := make([]K, len(target))
+	var i = 0
+	for k := range target {
+		keys[i] = k
+		i++
+	}
+	return keys
 }
 
 // Create Iterator to iterate over a map's entries
 // Target must be a map
 // Multiple Iterator on same map is possible.
-func NewMapEntryIterator(target interface{}) *MapEntryIterator {
-	tv := reflect.Indirect(reflect.ValueOf(target))
-
-	keys := tv.MapKeys()
+func NewMapEntryIterator[K comparable, V any](target map[K]V) *MapEntryIterator[K, V] {
+	keys := keys(target)
 	length := len(keys)
-	return &MapEntryIterator{tv, keys, 0, length}
+	return &MapEntryIterator[K, V]{target, keys, 0, length}
 }
