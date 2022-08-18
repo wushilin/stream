@@ -234,4 +234,3 @@ func NewMapEntryIterator[K comparable, V any](target map[K]V) *MapEntryIterator[
 	return &MapEntryIterator[K, V]{target, keys, 0, length}
 }
 
-
