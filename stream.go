@@ -5,7 +5,6 @@ package stream
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"os"
 )
@@ -530,7 +529,6 @@ func FromFileLines(filepath string) (Stream[string], error) {
 	iter := &fileLineIter{scanner}
 	result := FromIterator[string](iter)
 	return result.OnClose(func() {
-		fmt.Println("Closing file")
 		file.Close()
 	}), nil
 }
