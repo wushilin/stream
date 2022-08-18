@@ -89,6 +89,7 @@ type Stream[T any] interface {
 	// returns true => move to next
 	// returns false => aborts
 	EachCondition(func(T) bool)
+
 	// Close the stream. If your stream if from files, you have to close it.
 	// Any OnClose handler previously attached will be called
 	Close()
@@ -157,11 +158,12 @@ func (v *iterIter[T]) Next() (T, bool) {
 // Generate a infinite stream, using seed as first element, then
 // use MapFun and the previously returned value to generate the new value
 // e.g.
-//   func add1(i interface{}) interface{} {
-//     return i.(int) + 1
-//   }
-//   stream.Iterate(1, add1).Limit(3) <= will produce the same as
-//   stream.Of(1, 2, 3)
+//
+//	func add1(i interface{}) interface{} {
+//	  return i.(int) + 1
+//	}
+//	stream.Iterate(1, add1).Limit(3) <= will produce the same as
+//	stream.Of(1, 2, 3)
 func Iterate[T any](seed T, f func(T) T) Stream[T] {
 	return &baseStream[T]{&iterIter[T]{seed, f, false}, nil}
 }
@@ -176,9 +178,11 @@ func (v *genIter[T]) Next() (T, bool) {
 
 // Generate will use the GenFunc to generate a infinite stream
 // e.g.
-//   stream.Generate(func() interface{} {
-//     return 5
-//   }
+//
+//	stream.Generate(func() interface{} {
+//	  return 5
+//	}
+//
 // will generate a infinite stream of 5.
 // Note it is lazy so do not count infinite stream, it will not complete
 // Similarly, do not Reduce infinite stream
@@ -233,10 +237,11 @@ func FromMapEntries[K comparable, V any](it map[K]V) Stream[MapEntry[K, V]] {
 // Return stream's max, using supplied less than comparator.
 // Note since stream might be empty, the value is Optional.
 // Caller must use
-//   val, ok := result.Value()
-//   if ok {
-//     do_something_with(val)
-//   }
+//
+//	val, ok := result.Value()
+//	if ok {
+//	  do_something_with(val)
+//	}
 func (v *baseStream[T]) MaxCmp(f Comparator[T]) Optional[T] {
 	return v.Reduce(func(arg1, arg2 T) T {
 		if f(arg1, arg2) >= 0 {
@@ -253,10 +258,11 @@ func (v *baseStream[T]) Map(f func(in T) interface{}) Stream[interface{}] {
 // Return stream's min, using natural comparison. Support number and string
 // Note since stream might be empty, the value is Optional.
 // Caller must use
-//   val, ok := result.Value()
-//   if ok {
-//     do_something_with(val)
-//   }
+//
+//	val, ok := result.Value()
+//	if ok {
+//	  do_something_with(val)
+//	}
 func (v *baseStream[T]) MinCmp(f Comparator[T]) Optional[T] {
 	return v.Reduce(func(arg1, arg2 T) T {
 		if f(arg1, arg2) <= 0 {
@@ -601,9 +607,13 @@ func (v *baseStream[T]) Peek(f func(T)) Stream[T] {
 
 // Create a stream from a set of values.
 // e.g.
-//   stream.Of(1,2,3,4,5).Sum().Value() => 15, true
+//
+//	stream.Of(1,2,3,4,5).Sum().Value() => 15, true
+//
 // 15 is the result, true means the optional actually have a value
-//   stream.Of().Sum().Value() => nil, false
+//
+//	stream.Of().Sum().Value() => nil, false
+//
 // nil is default result, false means the stream is empty, so sum
 // is non-existent
 func Of[T any](vars ...T) Stream[T] {

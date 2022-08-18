@@ -19,10 +19,15 @@ func TestStream(*testing.T) {
 	st0 = st0.OnClose(func() {
 		fmt.Println("Don't forget not to create loop!")
 	})
-	st := Map(st0, func(i string) string { return i })
-	st.Close()
+	defer st0.Close()
+	st0, err = FromFileLines("stream.go")
+	st := Map(st0, func(i string) string { return "->>>" + i })
+	defer st.Close()
 
-	st = FromArray(slice)
+	st = st.Peek(func(i string) {
+		fmt.Println(i)
+	})
+	fmt.Println("Consuming ST now")
 	fmt.Println(st.Count())
 
 	st1 := FromArray(slice)

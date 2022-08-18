@@ -1,0 +1,1355 @@
+Consuming ST now
+->>>/*
+->>>Define stream just like java
+->>>*/
+->>>package stream
+->>>
+->>>import (
+->>>	"bufio"
+->>>	"fmt"
+->>>	"io"
+->>>	"os"
+->>>)
+->>>
+->>>// Comparator returns -1 if arg1 < arg2, returns 0 if arg1 == arg2 and returns 1 if arg1 > arg2
+->>>type Comparator[T any] func(arg1, arg2 T) int
+->>>
+->>>// Optional value may or may not have a value
+->>>type Optional[T any] interface {
+->>>	// Return the value and if value doesn't exist, false.
+->>>	// Caller need to check value exist before the value can be trusted
+->>>	Value() (T, bool)
+->>>
+->>>	// Return another optional value, when call Value() on the new optional,
+->>>	// return this object's value if present
+->>>	// If not, return other's Value()
+->>>	Or(other Optional[T]) Optional[T]
+->>>
+->>>	// Return this object's value if present, or the defaultValue supplied
+->>>	OrValue(defaultV T) T
+->>>}
+->>>
+->>>func Map[F any, T any](src Stream[F], f func(in F) T) Stream[T] {
+->>>	return &baseStream[T]{&mapIterWrapper[F, T]{src.Iterator(), f}, func() {
+->>>		src.Close()
+->>>	}}
+->>>}
+->>>
+->>>// Stream defines java like stream magics
+->>>type Stream[T any] interface {
+->>>	// Due to Golang generic limitation, the map only takes interface{} as result
+->>>	// If you want to have the type parameterized, use stream.Map(src Stream[F], func(F) T) Stream[T]
+->>>	// For each element of the stream, apply a map function, and return the
+->>>	// mapped result stream. It is lazy so only operated when you use a terminal operator
+->>>	// e.g.
+->>>	//   stream.Range(0, 10).Map(func(a interface{}) interface{} {
+->>>	//     return a.(int) + 1
+->>>	//   }
+->>>	// will return a lazy stream, from 1~10 (not range(0,10) is 0~9)
+->>>	Map(f func(in T) interface{}) Stream[interface{}]
+->>>
+->>>	// Use a reduce function to reduce elements in the stream and return reduced resumt.
+->>>	// e.g.
+->>>	//   stream.Range(0, 10).Reduce(func(a, b interface{}) interface{} {
+->>>	//     if a.(int) > b.(int) {
+->>>	//       return a
+->>>	//     }
+->>>	//     return b
+->>>	//   }
+->>>	// will return an optional, value is 9. This essentially reduce using Max(a,b) function
+->>>	// This is a terminal operator
+->>>	Reduce(f func(arg1, arg2 T) T) Optional[T]
+->>>
+->>>	// Lazily limit the elements to process to number
+->>>	Limit(number int) Stream[T]
+->>>
+->>>	// Count elements in stream.
+->>>	// This is terminal operator
+->>>	Count() int
+->>>
+->>>	// Similar to Map, but skip if the predict func did not pass the test.
+->>>	// Return a lazy stream
+->>>	// e.g.
+->>>	//   stream.Range(0, 10).Filer(func(a interface{}) bool) {
+->>>	//      return a.(int) > 5
+->>>	//   }
+->>>	// will return a stream from [6 ~ 9]
+->>>	Filter(f func(arg T) bool) Stream[T]
+->>>
+->>>	// For each of the stream, do the function
+->>>	// e.g.
+->>>	// var sum := 0
+->>>	//   stream.Of(1, 2, 3).Each(func(i interface{}) {
+->>>	//     sum = sum + i.(int)
+->>>	//   })
+->>>	// will return 6
+->>>	//   Note this is a terminal operator
+->>>	Each(f func(T))
+->>>
+->>>	// Same as Each, but depend on the bool value to continue
+->>>	// returns true => move to next
+->>>	// returns false => aborts
+->>>	EachCondition(func(T) bool)
+->>>
+->>>	// Close the stream. If your stream if from files, you have to close it.
+->>>	// Any OnClose handler previously attached will be called
+->>>	Close()
+->>>
+->>>	// Attach another close handler to the stream.
+->>>	// The handler will be called after the previous handler had been called
+->>>	OnClose(closefunc func()) Stream[T]
+->>>
+->>>	// Return an iterator of elements from the stream
+->>>	Iterator() Iterator[T]
+->>>
+->>>	// Concat the other stream to end of current stream and return the new stream.
+->>>	// Both original stream and other stream itself are not modified.
+->>>	Concat(other Stream[T]) Stream[T]
+->>>
+->>>	// Collect elements to target. Target must be array/slice of same type as the elements.
+->>>	// The max number if elements to collect is len(target).
+->>>	// Returns the number of elements collected
+->>>	// When number of elements collected equal to slice/array cap, there might be more elemnts to be collected
+->>>	// otherwise, it is guaranteed no more elements left in stream
+->>>	CollectTo(target []T) int
+->>>
+->>>	// Get max in the stream using a less comparator function
+->>>	MaxCmp(cmp Comparator[T]) Optional[T]
+->>>
+->>>	// Get min in the stream using a less comparator function
+->>>	MinCmp(cmp Comparator[T]) Optional[T]
+->>>
+->>>	// Skip N elements in the stream, returning a new stream
+->>>	Skip(number int) Stream[T]
+->>>
+->>>	// Return a new stream of itself, but when elements are consumed, the peek function is called
+->>>	// e.g.
+->>>	//   sum := 0
+->>>	//   fmt.Println(stream.Range(0, 10).Peek(func(i interface) {
+->>>	//     sum = sum + i.(int)
+->>>	//   }).Count())
+->>>	//   fmt.Println("Sum is", sum)
+->>>	// This will count the elements, as well as add a sum
+->>>	Peek(f func(T)) Stream[T]
+->>>
+->>>	// Stream all elements to channel. May block the caller if
+->>>	// the channel is full
+->>>	SendTo(chan T)
+->>>}
+->>>
+->>>// GenFunc is a function generate values, It is also a ProducerFunc
+->>>type GenFunc[T any] func() T
+->>>
+->>>type iterIter[T any] struct {
+->>>	seed         T
+->>>	f            func(in T) T
+->>>	initReturned bool
+->>>}
+->>>
+->>>func (v *iterIter[T]) Next() (T, bool) {
+->>>	if !v.initReturned {
+->>>		v.initReturned = true
+->>>		return v.seed, true
+->>>	} else {
+->>>		v.seed = v.f(v.seed)
+->>>		return v.seed, true
+->>>	}
+->>>}
+->>>
+->>>// Generate a infinite stream, using seed as first element, then
+->>>// use MapFun and the previously returned value to generate the new value
+->>>// e.g.
+->>>//
+->>>//	func add1(i interface{}) interface{} {
+->>>//	  return i.(int) + 1
+->>>//	}
+->>>//	stream.Iterate(1, add1).Limit(3) <= will produce the same as
+->>>//	stream.Of(1, 2, 3)
+->>>func Iterate[T any](seed T, f func(T) T) Stream[T] {
+->>>	return &baseStream[T]{&iterIter[T]{seed, f, false}, nil}
+->>>}
+->>>
+->>>type genIter[T any] struct {
+->>>	f func() T
+->>>}
+->>>
+->>>func (v *genIter[T]) Next() (T, bool) {
+->>>	return v.f(), true
+->>>}
+->>>
+->>>// Generate will use the GenFunc to generate a infinite stream
+->>>// e.g.
+->>>//
+->>>//	stream.Generate(func() interface{} {
+->>>//	  return 5
+->>>//	}
+->>>//
+->>>// will generate a infinite stream of 5.
+->>>// Note it is lazy so do not count infinite stream, it will not complete
+->>>// Similarly, do not Reduce infinite stream
+->>>// You can limit first before reducing
+->>>func Generate[T any](f func() T) Stream[T] {
+->>>	return &baseStream[T]{&genIter[T]{f}, nil}
+->>>}
+->>>
+->>>// Return stream from iterator. stream's reduce function will consume all
+->>>// items in iterator
+->>>func FromIterator[T any](it Iterator[T]) Stream[T] {
+->>>	return &baseStream[T]{it, nil}
+->>>}
+->>>
+->>>// Return stream from array. It is safe to call multiple FromArray on same array
+->>>// The call doesn't modify source array
+->>>func FromArray[T any](it []T) Stream[T] {
+->>>	ai := NewArrayIterator(it)
+->>>	return &baseStream[T]{ai, nil}
+->>>}
+->>>
+->>>// Return stream from channel. If you use same channel create multiple streams
+->>>// all streams will share the channel and may see part of the data
+->>>// Sender of channel must close or stream's reduce function/map function
+->>>// may not terminate
+->>>func FromChannel[T any](it chan T) Stream[T] {
+->>>	ai := NewChannelIterator(it)
+->>>	return &baseStream[T]{ai, nil}
+->>>}
+->>>
+->>>// Create stream from map's keys. Note the iterator is a snapshot of map
+->>>// subsequent modification after Stream is created won't be visiable to stream
+->>>func FromMapKeys[K comparable, V any](it map[K]V) Stream[K] {
+->>>	ai := NewMapKeyIterator(it)
+->>>	return &baseStream[K]{ai, nil}
+->>>}
+->>>
+->>>// Create stream from map's values. Note the iterator is a snapshot of map
+->>>// subsequent modification after Stream is created won't be visiable to stream
+->>>func FromMapValues[K comparable, V any](it map[K]V) Stream[V] {
+->>>	ai := NewMapValueIterator(it)
+->>>	return &baseStream[V]{ai, nil}
+->>>}
+->>>
+->>>// Create stream from map's key value pairs. Note the iterator is a snapshot of map
+->>>// subsequent modification after Stream is created won't be visiable to stream
+->>>func FromMapEntries[K comparable, V any](it map[K]V) Stream[MapEntry[K, V]] {
+->>>	ai := NewMapEntryIterator(it)
+->>>	return &baseStream[MapEntry[K, V]]{ai, nil}
+->>>}
+->>>
+->>>// Return stream's max, using supplied less than comparator.
+->>>// Note since stream might be empty, the value is Optional.
+->>>// Caller must use
+->>>//
+->>>//	val, ok := result.Value()
+->>>//	if ok {
+->>>//	  do_something_with(val)
+->>>//	}
+->>>func (v *baseStream[T]) MaxCmp(f Comparator[T]) Optional[T] {
+->>>	return v.Reduce(func(arg1, arg2 T) T {
+->>>		if f(arg1, arg2) >= 0 {
+->>>			return arg1
+->>>		}
+->>>		return arg2
+->>>	})
+->>>}
+->>>
+->>>func (v *baseStream[T]) Map(f func(in T) interface{}) Stream[interface{}] {
+->>>	return Map[T](v, f)
+->>>}
+->>>
+->>>// Return stream's min, using natural comparison. Support number and string
+->>>// Note since stream might be empty, the value is Optional.
+->>>// Caller must use
+->>>//
+->>>//	val, ok := result.Value()
+->>>//	if ok {
+->>>//	  do_something_with(val)
+->>>//	}
+->>>func (v *baseStream[T]) MinCmp(f Comparator[T]) Optional[T] {
+->>>	return v.Reduce(func(arg1, arg2 T) T {
+->>>		if f(arg1, arg2) <= 0 {
+->>>			return arg1
+->>>		}
+->>>		return arg2
+->>>	})
+->>>}
+->>>
+->>>type baseStream[T any] struct {
+->>>	src       Iterator[T]
+->>>	closefunc func()
+->>>}
+->>>
+->>>type mapIterWrapper[F, T any] struct {
+->>>	src Iterator[F]
+->>>	f   func(F) T
+->>>}
+->>>
+->>>type filterIterWrapper[T any] struct {
+->>>	src Iterator[T]
+->>>	f   func(T) bool
+->>>}
+->>>
+->>>type limitIterWrapper[T any] struct {
+->>>	src   Iterator[T]
+->>>	limit int
+->>>	count int
+->>>}
+->>>
+->>>func (v *limitIterWrapper[T]) Next() (T, bool) {
+->>>	if v.limit <= v.count {
+->>>		var zv T
+->>>		return zv, false
+->>>	}
+->>>
+->>>	nextv, ok := v.src.Next()
+->>>	if ok {
+->>>		v.count++
+->>>		return nextv, ok
+->>>	} else {
+->>>		var zv T
+->>>		return zv, ok
+->>>	}
+->>>}
+->>>
+->>>func (v *filterIterWrapper[T]) Next() (T, bool) {
+->>>	for {
+->>>		next, ok := v.src.Next()
+->>>		if ok {
+->>>			if v.f(next) {
+->>>				return next, ok
+->>>			}
+->>>		} else {
+->>>			var zv T
+->>>			return zv, false
+->>>		}
+->>>	}
+->>>}
+->>>
+->>>func (v *mapIterWrapper[F, T]) Next() (T, bool) {
+->>>	val, ok := v.src.Next()
+->>>	if !ok {
+->>>		var zv T
+->>>		return zv, false
+->>>	} else {
+->>>		return v.f(val), ok
+->>>	}
+->>>}
+->>>
+->>>type baseOptional[T any] struct {
+->>>	value   T
+->>>	present bool
+->>>}
+->>>
+->>>func (v *baseOptional[T]) Value() (T, bool) {
+->>>	if v.present {
+->>>		return v.value, true
+->>>	} else {
+->>>		var zv T
+->>>		return zv, false
+->>>	}
+->>>}
+->>>
+->>>func (v *baseOptional[T]) Or(other Optional[T]) Optional[T] {
+->>>	if v.present {
+->>>		return v
+->>>	} else {
+->>>		return other
+->>>	}
+->>>}
+->>>
+->>>func (v *baseOptional[T]) OrValue(dv T) T {
+->>>	if v.present {
+->>>		return v.value
+->>>	} else {
+->>>		return dv
+->>>	}
+->>>}
+->>>
+->>>type Number interface {
+->>>	~int8 | ~int16 | ~int32 | ~int64 | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~string | ~int | ~float32 | ~float64
+->>>}
+->>>
+->>>func Sum[T Number](v Stream[T]) Optional[T] {
+->>>	return v.Reduce(func(a, b T) T {
+->>>		return a + b
+->>>	})
+->>>}
+->>>
+->>>func (v *baseStream[T]) Close() {
+->>>	if v.closefunc != nil {
+->>>		v.closefunc()
+->>>	}
+->>>}
+->>>
+->>>func (v *baseStream[T]) Count() int {
+->>>	var count int = 0
+->>>	for _, ok := v.src.Next(); ok; _, ok = v.src.Next() {
+->>>		count++
+->>>	}
+->>>	return count
+->>>}
+->>>
+->>>func (v *baseStream[T]) Each(f func(T)) {
+->>>	for val, ok := v.src.Next(); ok; val, ok = v.src.Next() {
+->>>		f(val)
+->>>	}
+->>>}
+->>>
+->>>func (v *baseStream[T]) EachCondition(f func(T) bool) {
+->>>	for val, ok := v.src.Next(); ok; val, ok = v.src.Next() {
+->>>		if !f(val) {
+->>>			break
+->>>		}
+->>>	}
+->>>}
+->>>
+->>>func (v *baseStream[T]) Filter(f func(T) bool) Stream[T] {
+->>>	iter := v.src
+->>>	dest := &filterIterWrapper[T]{iter, f}
+->>>	return &baseStream[T]{dest, nil}
+->>>}
+->>>
+->>>func (v *baseStream[T]) Limit(limit int) Stream[T] {
+->>>	iter := v.src
+->>>	dest := &limitIterWrapper[T]{iter, limit, 0}
+->>>	return &baseStream[T]{dest, nil}
+->>>}
+->>>
+->>>func (v *baseStream[T]) OnClose(f func()) Stream[T] {
+->>>	oldclosefunc := v.closefunc
+->>>	v.closefunc = func() {
+->>>		if oldclosefunc != nil {
+->>>			oldclosefunc()
+->>>		}
+->>>		if f != nil {
+->>>			f()
+->>>		}
+->>>	}
+->>>	return v
+->>>}
+->>>
+->>>func NewEmptyOptional[T any]() Optional[T] {
+->>>	var zv T
+->>>	return &baseOptional[T]{zv, false}
+->>>}
+->>>
+->>>// Return an optional has a value
+->>>// call to result.Value() will return val, true
+->>>func NewOptional[T any](val T) Optional[T] {
+->>>	return &baseOptional[T]{val, true}
+->>>}
+->>>
+->>>func (v *baseStream[T]) Reduce(f func(arg1, arg2 T) T) Optional[T] {
+->>>
+->>>	last_val, ok := v.src.Next()
+->>>	if !ok {
+->>>		return NewEmptyOptional[T]()
+->>>	}
+->>>
+->>>	for nv, ok := v.src.Next(); ok; nv, ok = v.src.Next() {
+->>>		last_val = f(last_val, nv)
+->>>	}
+->>>	return NewOptional(last_val)
+->>>}
+->>>
+->>>func (v *baseStream[T]) Iterator() Iterator[T] {
+->>>	return v.src
+->>>}
+->>>
+->>>type concatIter[T any] struct {
+->>>	first, second                   Iterator[T]
+->>>	firstExhausted, secondExhausted bool
+->>>}
+->>>
+->>>func (v *concatIter[T]) Next() (T, bool) {
+->>>	if v.firstExhausted && v.secondExhausted {
+->>>		var zv T
+->>>		return zv, false
+->>>	}
+->>>	if !v.firstExhausted {
+->>>		val, ok := v.first.Next()
+->>>		if ok {
+->>>			return val, ok
+->>>		} else {
+->>>			v.firstExhausted = true
+->>>		}
+->>>	}
+->>>
+->>>	if !v.secondExhausted {
+->>>		val, ok := v.second.Next()
+->>>		if ok {
+->>>			return val, ok
+->>>		} else {
+->>>			v.secondExhausted = true
+->>>		}
+->>>	}
+->>>	var zv T
+->>>	return zv, false
+->>>}
+->>>
+->>>func (v *baseStream[T]) Concat(other Stream[T]) Stream[T] {
+->>>	iter := v.src
+->>>	dest := &concatIter[T]{iter, other.Iterator(), false, false}
+->>>	return &baseStream[T]{dest, nil}
+->>>}
+->>>
+->>>func (v *baseStream[T]) CollectTo(dest []T) (count int) {
+->>>	max := len(dest)
+->>>	count = 0
+->>>	for val, ok := v.src.Next(); ok; val, ok = v.src.Next() {
+->>>		dest[count] = val
+->>>		count++
+->>>		if count >= max {
+->>>			break
+->>>		}
+->>>	}
+->>>	return
+->>>}
+->>>
+->>>type fileLineIter struct {
+->>>	src *bufio.Scanner
+->>>}
+->>>
+->>>func (v *fileLineIter) Next() (string, bool) {
+->>>	ok := v.src.Scan()
+->>>	if !ok {
+->>>		return "", false
+->>>	} else {
+->>>		return v.src.Text(), true
+->>>	}
+->>>}
+->>>
+->>>// Return a stream from file lines. Caller must call close
+->>>// on return stream. If file open fails, the stream will
+->>>// be nil and error will be returned.
+->>>func FromFileLines(filepath string) (Stream[string], error) {
+->>>	file, err := os.Open(filepath)
+->>>	if err != nil {
+->>>		return nil, err
+->>>	}
+->>>	scanner := bufio.NewScanner(file)
+->>>	scanner.Split(bufio.ScanLines)
+->>>	iter := &fileLineIter{scanner}
+->>>	result := FromIterator[string](iter)
+->>>	return result.OnClose(func() {
+->>>		fmt.Println("Closing file")
+->>>		file.Close()
+->>>	}), nil
+->>>}
+->>>
+->>>// Create new stream from a reader, with the delimiter for tokenizer
+->>>func FromReader(r io.Reader, delimeter rune) Stream[string] {
+->>>	scanner := bufio.NewScanner(r)
+->>>	scanner.Split(bufio.ScanLines)
+->>>	iter := &fileLineIter{scanner}
+->>>	return FromIterator[string](iter)
+->>>}
+->>>
+->>>// Return Stream of range from low (inclusive) to high(exclusive).
+->>>// values are all int.
+->>>// Again, it is lazy, don't worry about the pre-allocation of memory.
+->>>// It is safe to do stream.Range(0, 10000000)
+->>>func Range(low, high int) Stream[int] {
+->>>	return Iterate(low, func(i int) int {
+->>>		return i + 1
+->>>	}).Limit(high - low)
+->>>}
+->>>
+->>>type skipIter[T any] struct {
+->>>	src     Iterator[T]
+->>>	skipN   int
+->>>	skipped int
+->>>}
+->>>
+->>>func (v *skipIter[T]) Next() (T, bool) {
+->>>	if v.skipped >= v.skipN {
+->>>		return v.src.Next()
+->>>	} else {
+->>>		var i int
+->>>		for i = 0; i < v.skipN; i++ {
+->>>			_, ok := v.src.Next()
+->>>			if !ok {
+->>>				var zv T
+->>>				return zv, false
+->>>			} else {
+->>>				v.skipped++
+->>>			}
+->>>		}
+->>>		return v.src.Next()
+->>>	}
+->>>}
+->>>
+->>>func (v *baseStream[T]) Skip(number int) Stream[T] {
+->>>	return &baseStream[T]{&skipIter[T]{v.src, number, 0}, nil}
+->>>}
+->>>
+->>>func (v *baseStream[T]) SendTo(c chan T) {
+->>>	v.Each(func(i T) {
+->>>		c <- i
+->>>	})
+->>>}
+->>>
+->>>type peekIter[T any] struct {
+->>>	src Iterator[T]
+->>>	f   func(T)
+->>>}
+->>>
+->>>func (v *peekIter[T]) Next() (T, bool) {
+->>>	next, ok := v.src.Next()
+->>>	if !ok {
+->>>		return next, ok
+->>>	} else {
+->>>		v.f(next)
+->>>		return next, ok
+->>>	}
+->>>}
+->>>func (v *baseStream[T]) Peek(f func(T)) Stream[T] {
+->>>	return &baseStream[T]{&peekIter[T]{v.src, f}, nil}
+->>>}
+->>>
+->>>// Create a stream from a set of values.
+->>>// e.g.
+->>>//
+->>>//	stream.Of(1,2,3,4,5).Sum().Value() => 15, true
+->>>//
+->>>// 15 is the result, true means the optional actually have a value
+->>>//
+->>>//	stream.Of().Sum().Value() => nil, false
+->>>//
+->>>// nil is default result, false means the stream is empty, so sum
+->>>// is non-existent
+->>>func Of[T any](vars ...T) Stream[T] {
+->>>	return FromIterator(NewArrayIterator(vars))
+->>>}
+->>>
+->>>type NumberedItem[T any] struct {
+->>>	Index int
+->>>	Item  T
+->>>}
+->>>
+->>>// Allow stream to be accessed with Index.
+->>>// Usage:
+->>>// new_stream := stream.WithIndex(stream.Of("1","2","3"))
+->>>// new_stream.Each(func(i stream.NumberedItem) {
+->>>//    fmt.Println(i.Index, i.Item)
+->>>// })
+->>>// This is actually implemented using the Map function internally.
+->>>// func WithIndex(in Stream) Stream {
+->>>//   index := 0
+->>>//   return in.Map(func(i interface{}) NumberedItem {
+->>>//     new_index := index
+->>>//     index++
+->>>//     return NumberedItem{new_index, i}
+->>>//   })
+->>>// }
+->>>
+->>>func WithIndex[T any](v Stream[T]) Stream[NumberedItem[T]] {
+->>>	index := 0
+->>>	return Map(v, func(i T) NumberedItem[T] {
+->>>		new_index := index
+->>>		index++
+->>>		return NumberedItem[T]{new_index, i}
+->>>	})
+->>>}
+651
+/*
+Define stream just like java
+*/
+package stream
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+)
+
+// Comparator returns -1 if arg1 < arg2, returns 0 if arg1 == arg2 and returns 1 if arg1 > arg2
+type Comparator[T any] func(arg1, arg2 T) int
+
+// Optional value may or may not have a value
+type Optional[T any] interface {
+	// Return the value and if value doesn't exist, false.
+	// Caller need to check value exist before the value can be trusted
+	Value() (T, bool)
+
+	// Return another optional value, when call Value() on the new optional,
+	// return this object's value if present
+	// If not, return other's Value()
+	Or(other Optional[T]) Optional[T]
+
+	// Return this object's value if present, or the defaultValue supplied
+	OrValue(defaultV T) T
+}
+
+func Map[F any, T any](src Stream[F], f func(in F) T) Stream[T] {
+	return &baseStream[T]{&mapIterWrapper[F, T]{src.Iterator(), f}, func() {
+		src.Close()
+	}}
+}
+
+// Stream defines java like stream magics
+type Stream[T any] interface {
+	// Due to Golang generic limitation, the map only takes interface{} as result
+	// If you want to have the type parameterized, use stream.Map(src Stream[F], func(F) T) Stream[T]
+	// For each element of the stream, apply a map function, and return the
+	// mapped result stream. It is lazy so only operated when you use a terminal operator
+	// e.g.
+	//   stream.Range(0, 10).Map(func(a interface{}) interface{} {
+	//     return a.(int) + 1
+	//   }
+	// will return a lazy stream, from 1~10 (not range(0,10) is 0~9)
+	Map(f func(in T) interface{}) Stream[interface{}]
+
+	// Use a reduce function to reduce elements in the stream and return reduced resumt.
+	// e.g.
+	//   stream.Range(0, 10).Reduce(func(a, b interface{}) interface{} {
+	//     if a.(int) > b.(int) {
+	//       return a
+	//     }
+	//     return b
+	//   }
+	// will return an optional, value is 9. This essentially reduce using Max(a,b) function
+	// This is a terminal operator
+	Reduce(f func(arg1, arg2 T) T) Optional[T]
+
+	// Lazily limit the elements to process to number
+	Limit(number int) Stream[T]
+
+	// Count elements in stream.
+	// This is terminal operator
+	Count() int
+
+	// Similar to Map, but skip if the predict func did not pass the test.
+	// Return a lazy stream
+	// e.g.
+	//   stream.Range(0, 10).Filer(func(a interface{}) bool) {
+	//      return a.(int) > 5
+	//   }
+	// will return a stream from [6 ~ 9]
+	Filter(f func(arg T) bool) Stream[T]
+
+	// For each of the stream, do the function
+	// e.g.
+	// var sum := 0
+	//   stream.Of(1, 2, 3).Each(func(i interface{}) {
+	//     sum = sum + i.(int)
+	//   })
+	// will return 6
+	//   Note this is a terminal operator
+	Each(f func(T))
+
+	// Same as Each, but depend on the bool value to continue
+	// returns true => move to next
+	// returns false => aborts
+	EachCondition(func(T) bool)
+
+	// Close the stream. If your stream if from files, you have to close it.
+	// Any OnClose handler previously attached will be called
+	Close()
+
+	// Attach another close handler to the stream.
+	// The handler will be called after the previous handler had been called
+	OnClose(closefunc func()) Stream[T]
+
+	// Return an iterator of elements from the stream
+	Iterator() Iterator[T]
+
+	// Concat the other stream to end of current stream and return the new stream.
+	// Both original stream and other stream itself are not modified.
+	Concat(other Stream[T]) Stream[T]
+
+	// Collect elements to target. Target must be array/slice of same type as the elements.
+	// The max number if elements to collect is len(target).
+	// Returns the number of elements collected
+	// When number of elements collected equal to slice/array cap, there might be more elemnts to be collected
+	// otherwise, it is guaranteed no more elements left in stream
+	CollectTo(target []T) int
+
+	// Get max in the stream using a less comparator function
+	MaxCmp(cmp Comparator[T]) Optional[T]
+
+	// Get min in the stream using a less comparator function
+	MinCmp(cmp Comparator[T]) Optional[T]
+
+	// Skip N elements in the stream, returning a new stream
+	Skip(number int) Stream[T]
+
+	// Return a new stream of itself, but when elements are consumed, the peek function is called
+	// e.g.
+	//   sum := 0
+	//   fmt.Println(stream.Range(0, 10).Peek(func(i interface) {
+	//     sum = sum + i.(int)
+	//   }).Count())
+	//   fmt.Println("Sum is", sum)
+	// This will count the elements, as well as add a sum
+	Peek(f func(T)) Stream[T]
+
+	// Stream all elements to channel. May block the caller if
+	// the channel is full
+	SendTo(chan T)
+}
+
+// GenFunc is a function generate values, It is also a ProducerFunc
+type GenFunc[T any] func() T
+
+type iterIter[T any] struct {
+	seed         T
+	f            func(in T) T
+	initReturned bool
+}
+
+func (v *iterIter[T]) Next() (T, bool) {
+	if !v.initReturned {
+		v.initReturned = true
+		return v.seed, true
+	} else {
+		v.seed = v.f(v.seed)
+		return v.seed, true
+	}
+}
+
+// Generate a infinite stream, using seed as first element, then
+// use MapFun and the previously returned value to generate the new value
+// e.g.
+//
+//	func add1(i interface{}) interface{} {
+//	  return i.(int) + 1
+//	}
+//	stream.Iterate(1, add1).Limit(3) <= will produce the same as
+//	stream.Of(1, 2, 3)
+func Iterate[T any](seed T, f func(T) T) Stream[T] {
+	return &baseStream[T]{&iterIter[T]{seed, f, false}, nil}
+}
+
+type genIter[T any] struct {
+	f func() T
+}
+
+func (v *genIter[T]) Next() (T, bool) {
+	return v.f(), true
+}
+
+// Generate will use the GenFunc to generate a infinite stream
+// e.g.
+//
+//	stream.Generate(func() interface{} {
+//	  return 5
+//	}
+//
+// will generate a infinite stream of 5.
+// Note it is lazy so do not count infinite stream, it will not complete
+// Similarly, do not Reduce infinite stream
+// You can limit first before reducing
+func Generate[T any](f func() T) Stream[T] {
+	return &baseStream[T]{&genIter[T]{f}, nil}
+}
+
+// Return stream from iterator. stream's reduce function will consume all
+// items in iterator
+func FromIterator[T any](it Iterator[T]) Stream[T] {
+	return &baseStream[T]{it, nil}
+}
+
+// Return stream from array. It is safe to call multiple FromArray on same array
+// The call doesn't modify source array
+func FromArray[T any](it []T) Stream[T] {
+	ai := NewArrayIterator(it)
+	return &baseStream[T]{ai, nil}
+}
+
+// Return stream from channel. If you use same channel create multiple streams
+// all streams will share the channel and may see part of the data
+// Sender of channel must close or stream's reduce function/map function
+// may not terminate
+func FromChannel[T any](it chan T) Stream[T] {
+	ai := NewChannelIterator(it)
+	return &baseStream[T]{ai, nil}
+}
+
+// Create stream from map's keys. Note the iterator is a snapshot of map
+// subsequent modification after Stream is created won't be visiable to stream
+func FromMapKeys[K comparable, V any](it map[K]V) Stream[K] {
+	ai := NewMapKeyIterator(it)
+	return &baseStream[K]{ai, nil}
+}
+
+// Create stream from map's values. Note the iterator is a snapshot of map
+// subsequent modification after Stream is created won't be visiable to stream
+func FromMapValues[K comparable, V any](it map[K]V) Stream[V] {
+	ai := NewMapValueIterator(it)
+	return &baseStream[V]{ai, nil}
+}
+
+// Create stream from map's key value pairs. Note the iterator is a snapshot of map
+// subsequent modification after Stream is created won't be visiable to stream
+func FromMapEntries[K comparable, V any](it map[K]V) Stream[MapEntry[K, V]] {
+	ai := NewMapEntryIterator(it)
+	return &baseStream[MapEntry[K, V]]{ai, nil}
+}
+
+// Return stream's max, using supplied less than comparator.
+// Note since stream might be empty, the value is Optional.
+// Caller must use
+//
+//	val, ok := result.Value()
+//	if ok {
+//	  do_something_with(val)
+//	}
+func (v *baseStream[T]) MaxCmp(f Comparator[T]) Optional[T] {
+	return v.Reduce(func(arg1, arg2 T) T {
+		if f(arg1, arg2) >= 0 {
+			return arg1
+		}
+		return arg2
+	})
+}
+
+func (v *baseStream[T]) Map(f func(in T) interface{}) Stream[interface{}] {
+	return Map[T](v, f)
+}
+
+// Return stream's min, using natural comparison. Support number and string
+// Note since stream might be empty, the value is Optional.
+// Caller must use
+//
+//	val, ok := result.Value()
+//	if ok {
+//	  do_something_with(val)
+//	}
+func (v *baseStream[T]) MinCmp(f Comparator[T]) Optional[T] {
+	return v.Reduce(func(arg1, arg2 T) T {
+		if f(arg1, arg2) <= 0 {
+			return arg1
+		}
+		return arg2
+	})
+}
+
+type baseStream[T any] struct {
+	src       Iterator[T]
+	closefunc func()
+}
+
+type mapIterWrapper[F, T any] struct {
+	src Iterator[F]
+	f   func(F) T
+}
+
+type filterIterWrapper[T any] struct {
+	src Iterator[T]
+	f   func(T) bool
+}
+
+type limitIterWrapper[T any] struct {
+	src   Iterator[T]
+	limit int
+	count int
+}
+
+func (v *limitIterWrapper[T]) Next() (T, bool) {
+	if v.limit <= v.count {
+		var zv T
+		return zv, false
+	}
+Testing filter
+	"io"
+	"os"
+Testing limit
+/*
+Define stream just like java
+*/
+package stream
+Testing Map
+/*
+DEFINE STREAM JUST LIKE JAVA
+*/
+PACKAGE STREAM
+
+IMPORT (
+	"BUFIO"
+	"FMT"
+	"IO"
+	"OS"
+)
+
+// COMPARATOR RETURNS -1 IF ARG1 < ARG2, RETURNS 0 IF ARG1 == ARG2 AND RETURNS 1 IF ARG1 > ARG2
+TYPE COMPARATOR[T ANY] FUNC(ARG1, ARG2 T) INT
+
+// OPTIONAL VALUE MAY OR MAY NOT HAVE A VALUE
+TYPE OPTIONAL[T ANY] INTERFACE {
+	// RETURN THE VALUE AND IF VALUE DOESN'T EXIST, FALSE.
+	// CALLER NEED TO CHECK VALUE EXIST BEFORE THE VALUE CAN BE TRUSTED
+	VALUE() (T, BOOL)
+
+	// RETURN ANOTHER OPTIONAL VALUE, WHEN CALL VALUE() ON THE NEW OPTIONAL,
+	// RETURN THIS OBJECT'S VALUE IF PRESENT
+	// IF NOT, RETURN OTHER'S VALUE()
+	OR(OTHER OPTIONAL[T]) OPTIONAL[T]
+
+	// RETURN THIS OBJECT'S VALUE IF PRESENT, OR THE DEFAULTVALUE SUPPLIED
+	ORVALUE(DEFAULTV T) T
+}
+
+FUNC MAP[F ANY, T ANY](SRC STREAM[F], F FUNC(IN F) T) STREAM[T] {
+	RETURN &BASESTREAM[T]{&MAPITERWRAPPER[F, T]{SRC.ITERATOR(), F}, FUNC() {
+		SRC.CLOSE()
+	}}
+}
+
+// STREAM DEFINES JAVA LIKE STREAM MAGICS
+TYPE STREAM[T ANY] INTERFACE {
+	// DUE TO GOLANG GENERIC LIMITATION, THE MAP ONLY TAKES INTERFACE{} AS RESULT
+	// IF YOU WANT TO HAVE THE TYPE PARAMETERIZED, USE STREAM.MAP(SRC STREAM[F], FUNC(F) T) STREAM[T]
+	// FOR EACH ELEMENT OF THE STREAM, APPLY A MAP FUNCTION, AND RETURN THE
+	// MAPPED RESULT STREAM. IT IS LAZY SO ONLY OPERATED WHEN YOU USE A TERMINAL OPERATOR
+	// E.G.
+	//   STREAM.RANGE(0, 10).MAP(FUNC(A INTERFACE{}) INTERFACE{} {
+	//     RETURN A.(INT) + 1
+	//   }
+	// WILL RETURN A LAZY STREAM, FROM 1~10 (NOT RANGE(0,10) IS 0~9)
+	MAP(F FUNC(IN T) INTERFACE{}) STREAM[INTERFACE{}]
+
+	// USE A REDUCE FUNCTION TO REDUCE ELEMENTS IN THE STREAM AND RETURN REDUCED RESUMT.
+	// E.G.
+	//   STREAM.RANGE(0, 10).REDUCE(FUNC(A, B INTERFACE{}) INTERFACE{} {
+	//     IF A.(INT) > B.(INT) {
+	//       RETURN A
+	//     }
+	//     RETURN B
+	//   }
+	// WILL RETURN AN OPTIONAL, VALUE IS 9. THIS ESSENTIALLY REDUCE USING MAX(A,B) FUNCTION
+	// THIS IS A TERMINAL OPERATOR
+	REDUCE(F FUNC(ARG1, ARG2 T) T) OPTIONAL[T]
+
+	// LAZILY LIMIT THE ELEMENTS TO PROCESS TO NUMBER
+	LIMIT(NUMBER INT) STREAM[T]
+
+	// COUNT ELEMENTS IN STREAM.
+	// THIS IS TERMINAL OPERATOR
+	COUNT() INT
+
+	// SIMILAR TO MAP, BUT SKIP IF THE PREDICT FUNC DID NOT PASS THE TEST.
+	// RETURN A LAZY STREAM
+	// E.G.
+	//   STREAM.RANGE(0, 10).FILER(FUNC(A INTERFACE{}) BOOL) {
+	//      RETURN A.(INT) > 5
+	//   }
+	// WILL RETURN A STREAM FROM [6 ~ 9]
+	FILTER(F FUNC(ARG T) BOOL) STREAM[T]
+
+	// FOR EACH OF THE STREAM, DO THE FUNCTION
+	// E.G.
+	// VAR SUM := 0
+	//   STREAM.OF(1, 2, 3).EACH(FUNC(I INTERFACE{}) {
+	//     SUM = SUM + I.(INT)
+	//   })
+	// WILL RETURN 6
+	//   NOTE THIS IS A TERMINAL OPERATOR
+	EACH(F FUNC(T))
+
+	// SAME AS EACH, BUT DEPEND ON THE BOOL VALUE TO CONTINUE
+	// RETURNS TRUE => MOVE TO NEXT
+	// RETURNS FALSE => ABORTS
+	EACHCONDITION(FUNC(T) BOOL)
+
+	// CLOSE THE STREAM. IF YOUR STREAM IF FROM FILES, YOU HAVE TO CLOSE IT.
+	// ANY ONCLOSE HANDLER PREVIOUSLY ATTACHED WILL BE CALLED
+	CLOSE()
+
+	// ATTACH ANOTHER CLOSE HANDLER TO THE STREAM.
+	// THE HANDLER WILL BE CALLED AFTER THE PREVIOUS HANDLER HAD BEEN CALLED
+	ONCLOSE(CLOSEFUNC FUNC()) STREAM[T]
+
+	// RETURN AN ITERATOR OF ELEMENTS FROM THE STREAM
+	ITERATOR() ITERATOR[T]
+
+	// CONCAT THE OTHER STREAM TO END OF CURRENT STREAM AND RETURN THE NEW STREAM.
+	// BOTH ORIGINAL STREAM AND OTHER STREAM ITSELF ARE NOT MODIFIED.
+	CONCAT(OTHER STREAM[T]) STREAM[T]
+
+	// COLLECT ELEMENTS TO TARGET. TARGET MUST BE ARRAY/SLICE OF SAME TYPE AS THE ELEMENTS.
+	// THE MAX NUMBER IF ELEMENTS TO COLLECT IS LEN(TARGET).
+	// RETURNS THE NUMBER OF ELEMENTS COLLECTED
+	// WHEN NUMBER OF ELEMENTS COLLECTED EQUAL TO SLICE/ARRAY CAP, THERE MIGHT BE MORE ELEMNTS TO BE COLLECTED
+	// OTHERWISE, IT IS GUARANTEED NO MORE ELEMENTS LEFT IN STREAM
+	COLLECTTO(TARGET []T) INT
+
+	// GET MAX IN THE STREAM USING A LESS COMPARATOR FUNCTION
+	MAXCMP(CMP COMPARATOR[T]) OPTIONAL[T]
+
+	// GET MIN IN THE STREAM USING A LESS COMPARATOR FUNCTION
+	MINCMP(CMP COMPARATOR[T]) OPTIONAL[T]
+
+	// SKIP N ELEMENTS IN THE STREAM, RETURNING A NEW STREAM
+	SKIP(NUMBER INT) STREAM[T]
+
+	// RETURN A NEW STREAM OF ITSELF, BUT WHEN ELEMENTS ARE CONSUMED, THE PEEK FUNCTION IS CALLED
+	// E.G.
+	//   SUM := 0
+	//   FMT.PRINTLN(STREAM.RANGE(0, 10).PEEK(FUNC(I INTERFACE) {
+	//     SUM = SUM + I.(INT)
+	//   }).COUNT())
+	//   FMT.PRINTLN("SUM IS", SUM)
+	// THIS WILL COUNT THE ELEMENTS, AS WELL AS ADD A SUM
+	PEEK(F FUNC(T)) STREAM[T]
+
+	// STREAM ALL ELEMENTS TO CHANNEL. MAY BLOCK THE CALLER IF
+	// THE CHANNEL IS FULL
+	SENDTO(CHAN T)
+}
+
+// GENFUNC IS A FUNCTION GENERATE VALUES, IT IS ALSO A PRODUCERFUNC
+TYPE GENFUNC[T ANY] FUNC() T
+
+TYPE ITERITER[T ANY] STRUCT {
+	SEED         T
+	F            FUNC(IN T) T
+	INITRETURNED BOOL
+}
+
+FUNC (V *ITERITER[T]) NEXT() (T, BOOL) {
+	IF !V.INITRETURNED {
+		V.INITRETURNED = TRUE
+		RETURN V.SEED, TRUE
+	} ELSE {
+		V.SEED = V.F(V.SEED)
+		RETURN V.SEED, TRUE
+	}
+}
+
+// GENERATE A INFINITE STREAM, USING SEED AS FIRST ELEMENT, THEN
+// USE MAPFUN AND THE PREVIOUSLY RETURNED VALUE TO GENERATE THE NEW VALUE
+// E.G.
+//
+//	FUNC ADD1(I INTERFACE{}) INTERFACE{} {
+//	  RETURN I.(INT) + 1
+//	}
+//	STREAM.ITERATE(1, ADD1).LIMIT(3) <= WILL PRODUCE THE SAME AS
+//	STREAM.OF(1, 2, 3)
+FUNC ITERATE[T ANY](SEED T, F FUNC(T) T) STREAM[T] {
+	RETURN &BASESTREAM[T]{&ITERITER[T]{SEED, F, FALSE}, NIL}
+}
+
+TYPE GENITER[T ANY] STRUCT {
+	F FUNC() T
+}
+
+FUNC (V *GENITER[T]) NEXT() (T, BOOL) {
+	RETURN V.F(), TRUE
+}
+
+// GENERATE WILL USE THE GENFUNC TO GENERATE A INFINITE STREAM
+// E.G.
+//
+//	STREAM.GENERATE(FUNC() INTERFACE{} {
+//	  RETURN 5
+//	}
+//
+// WILL GENERATE A INFINITE STREAM OF 5.
+// NOTE IT IS LAZY SO DO NOT COUNT INFINITE STREAM, IT WILL NOT COMPLETE
+// SIMILARLY, DO NOT REDUCE INFINITE STREAM
+// YOU CAN LIMIT FIRST BEFORE REDUCING
+FUNC GENERATE[T ANY](F FUNC() T) STREAM[T] {
+	RETURN &BASESTREAM[T]{&GENITER[T]{F}, NIL}
+}
+
+// RETURN STREAM FROM ITERATOR. STREAM'S REDUCE FUNCTION WILL CONSUME ALL
+// ITEMS IN ITERATOR
+FUNC FROMITERATOR[T ANY](IT ITERATOR[T]) STREAM[T] {
+	RETURN &BASESTREAM[T]{IT, NIL}
+}
+
+// RETURN STREAM FROM ARRAY. IT IS SAFE TO CALL MULTIPLE FROMARRAY ON SAME ARRAY
+// THE CALL DOESN'T MODIFY SOURCE ARRAY
+FUNC FROMARRAY[T ANY](IT []T) STREAM[T] {
+	AI := NEWARRAYITERATOR(IT)
+	RETURN &BASESTREAM[T]{AI, NIL}
+}
+
+// RETURN STREAM FROM CHANNEL. IF YOU USE SAME CHANNEL CREATE MULTIPLE STREAMS
+// ALL STREAMS WILL SHARE THE CHANNEL AND MAY SEE PART OF THE DATA
+// SENDER OF CHANNEL MUST CLOSE OR STREAM'S REDUCE FUNCTION/MAP FUNCTION
+// MAY NOT TERMINATE
+FUNC FROMCHANNEL[T ANY](IT CHAN T) STREAM[T] {
+	AI := NEWCHANNELITERATOR(IT)
+	RETURN &BASESTREAM[T]{AI, NIL}
+}
+
+// CREATE STREAM FROM MAP'S KEYS. NOTE THE ITERATOR IS A SNAPSHOT OF MAP
+// SUBSEQUENT MODIFICATION AFTER STREAM IS CREATED WON'T BE VISIABLE TO STREAM
+FUNC FROMMAPKEYS[K COMPARABLE, V ANY](IT MAP[K]V) STREAM[K] {
+	AI := NEWMAPKEYITERATOR(IT)
+	RETURN &BASESTREAM[K]{AI, NIL}
+}
+
+// CREATE STREAM FROM MAP'S VALUES. NOTE THE ITERATOR IS A SNAPSHOT OF MAP
+// SUBSEQUENT MODIFICATION AFTER STREAM IS CREATED WON'T BE VISIABLE TO STREAM
+FUNC FROMMAPVALUES[K COMPARABLE, V ANY](IT MAP[K]V) STREAM[V] {
+	AI := NEWMAPVALUEITERATOR(IT)
+	RETURN &BASESTREAM[V]{AI, NIL}
+}
+
+// CREATE STREAM FROM MAP'S KEY VALUE PAIRS. NOTE THE ITERATOR IS A SNAPSHOT OF MAP
+// SUBSEQUENT MODIFICATION AFTER STREAM IS CREATED WON'T BE VISIABLE TO STREAM
+FUNC FROMMAPENTRIES[K COMPARABLE, V ANY](IT MAP[K]V) STREAM[MAPENTRY[K, V]] {
+	AI := NEWMAPENTRYITERATOR(IT)
+	RETURN &BASESTREAM[MAPENTRY[K, V]]{AI, NIL}
+}
+
+// RETURN STREAM'S MAX, USING SUPPLIED LESS THAN COMPARATOR.
+// NOTE SINCE STREAM MIGHT BE EMPTY, THE VALUE IS OPTIONAL.
+// CALLER MUST USE
+//
+//	VAL, OK := RESULT.VALUE()
+//	IF OK {
+//	  DO_SOMETHING_WITH(VAL)
+//	}
+FUNC (V *BASESTREAM[T]) MAXCMP(F COMPARATOR[T]) OPTIONAL[T] {
+	RETURN V.REDUCE(FUNC(ARG1, ARG2 T) T {
+		IF F(ARG1, ARG2) >= 0 {
+			RETURN ARG1
+		}
+		RETURN ARG2
+	})
+}
+
+FUNC (V *BASESTREAM[T]) MAP(F FUNC(IN T) INTERFACE{}) STREAM[INTERFACE{}] {
+	RETURN MAP[T](V, F)
+}
+
+// RETURN STREAM'S MIN, USING NATURAL COMPARISON. SUPPORT NUMBER AND STRING
+// NOTE SINCE STREAM MIGHT BE EMPTY, THE VALUE IS OPTIONAL.
+// CALLER MUST USE
+//
+//	VAL, OK := RESULT.VALUE()
+//	IF OK {
+//	  DO_SOMETHING_WITH(VAL)
+//	}
+FUNC (V *BASESTREAM[T]) MINCMP(F COMPARATOR[T]) OPTIONAL[T] {
+	RETURN V.REDUCE(FUNC(ARG1, ARG2 T) T {
+		IF F(ARG1, ARG2) <= 0 {
+			RETURN ARG1
+		}
+		RETURN ARG2
+	})
+}
+
+TYPE BASESTREAM[T ANY] STRUCT {
+	SRC       ITERATOR[T]
+	CLOSEFUNC FUNC()
+}
+
+TYPE MAPITERWRAPPER[F, T ANY] STRUCT {
+	SRC ITERATOR[F]
+	F   FUNC(F) T
+}
+
+TYPE FILTERITERWRAPPER[T ANY] STRUCT {
+	SRC ITERATOR[T]
+	F   FUNC(T) BOOL
+}
+
+TYPE LIMITITERWRAPPER[T ANY] STRUCT {
+	SRC   ITERATOR[T]
+	LIMIT INT
+	COUNT INT
+}
+
+FUNC (V *LIMITITERWRAPPER[T]) NEXT() (T, BOOL) {
+	IF V.LIMIT <= V.COUNT {
+		VAR ZV T
+		RETURN ZV, FALSE
+	}
+Testing reduce
+&{/*\nDefine stream just like java\n*/\npackage stream\n\nimport (\n	"bufio"\n	"fmt"\n	"io"\n	"os"\n)\n\n// Comparator returns -1 if arg1 < arg2, returns 0 if arg1 == arg2 and returns 1 if arg1 > arg2\ntype Comparator[T any] func(arg1, arg2 T) int\n\n// Optional value may or may not have a value\ntype Optional[T any] interface {\n	// Return the value and if value doesn't exist, false.\n	// Caller need to check value exist before the value can be trusted\n	Value() (T, bool)\n\n	// Return another optional value, when call Value() on the new optional,\n	// return this object's value if present\n	// If not, return other's Value()\n	Or(other Optional[T]) Optional[T]\n\n	// Return this object's value if present, or the defaultValue supplied\n	OrValue(defaultV T) T\n}\n\nfunc Map[F any, T any](src Stream[F], f func(in F) T) Stream[T] {\n	return &baseStream[T]{&mapIterWrapper[F, T]{src.Iterator(), f}, func() {\n		src.Close()\n	}}\n}\n\n// Stream defines java like stream magics\ntype Stream[T any] interface {\n	// Due to Golang generic limitation, the map only takes interface{} as result\n	// If you want to have the type parameterized, use stream.Map(src Stream[F], func(F) T) Stream[T]\n	// For each element of the stream, apply a map function, and return the\n	// mapped result stream. It is lazy so only operated when you use a terminal operator\n	// e.g.\n	//   stream.Range(0, 10).Map(func(a interface{}) interface{} {\n	//     return a.(int) + 1\n	//   }\n	// will return a lazy stream, from 1~10 (not range(0,10) is 0~9)\n	Map(f func(in T) interface{}) Stream[interface{}]\n\n	// Use a reduce function to reduce elements in the stream and return reduced resumt.\n	// e.g.\n	//   stream.Range(0, 10).Reduce(func(a, b interface{}) interface{} {\n	//     if a.(int) > b.(int) {\n	//       return a\n	//     }\n	//     return b\n	//   }\n	// will return an optional, value is 9. This essentially reduce using Max(a,b) function\n	// This is a terminal operator\n	Reduce(f func(arg1, arg2 T) T) Optional[T]\n\n	// Lazily limit the elements to process to number\n	Limit(number int) Stream[T]\n\n	// Count elements in stream.\n	// This is terminal operator\n	Count() int\n\n	// Similar to Map, but skip if the predict func did not pass the test.\n	// Return a lazy stream\n	// e.g.\n	//   stream.Range(0, 10).Filer(func(a interface{}) bool) {\n	//      return a.(int) > 5\n	//   }\n	// will return a stream from [6 ~ 9]\n	Filter(f func(arg T) bool) Stream[T]\n\n	// For each of the stream, do the function\n	// e.g.\n	// var sum := 0\n	//   stream.Of(1, 2, 3).Each(func(i interface{}) {\n	//     sum = sum + i.(int)\n	//   })\n	// will return 6\n	//   Note this is a terminal operator\n	Each(f func(T))\n\n	// Same as Each, but depend on the bool value to continue\n	// returns true => move to next\n	// returns false => aborts\n	EachCondition(func(T) bool)\n\n	// Close the stream. If your stream if from files, you have to close it.\n	// Any OnClose handler previously attached will be called\n	Close()\n\n	// Attach another close handler to the stream.\n	// The handler will be called after the previous handler had been called\n	OnClose(closefunc func()) Stream[T]\n\n	// Return an iterator of elements from the stream\n	Iterator() Iterator[T]\n\n	// Concat the other stream to end of current stream and return the new stream.\n	// Both original stream and other stream itself are not modified.\n	Concat(other Stream[T]) Stream[T]\n\n	// Collect elements to target. Target must be array/slice of same type as the elements.\n	// The max number if elements to collect is len(target).\n	// Returns the number of elements collected\n	// When number of elements collected equal to slice/array cap, there might be more elemnts to be collected\n	// otherwise, it is guaranteed no more elements left in stream\n	CollectTo(target []T) int\n\n	// Get max in the stream using a less comparator function\n	MaxCmp(cmp Comparator[T]) Optional[T]\n\n	// Get min in the stream using a less comparator function\n	MinCmp(cmp Comparator[T]) Optional[T]\n\n	// Skip N elements in the stream, returning a new stream\n	Skip(number int) Stream[T]\n\n	// Return a new stream of itself, but when elements are consumed, the peek function is called\n	// e.g.\n	//   sum := 0\n	//   fmt.Println(stream.Range(0, 10).Peek(func(i interface) {\n	//     sum = sum + i.(int)\n	//   }).Count())\n	//   fmt.Println("Sum is", sum)\n	// This will count the elements, as well as add a sum\n	Peek(f func(T)) Stream[T]\n\n	// Stream all elements to channel. May block the caller if\n	// the channel is full\n	SendTo(chan T)\n}\n\n// GenFunc is a function generate values, It is also a ProducerFunc\ntype GenFunc[T any] func() T\n\ntype iterIter[T any] struct {\n	seed         T\n	f            func(in T) T\n	initReturned bool\n}\n\nfunc (v *iterIter[T]) Next() (T, bool) {\n	if !v.initReturned {\n		v.initReturned = true\n		return v.seed, true\n	} else {\n		v.seed = v.f(v.seed)\n		return v.seed, true\n	}\n}\n\n// Generate a infinite stream, using seed as first element, then\n// use MapFun and the previously returned value to generate the new value\n// e.g.\n//\n//	func add1(i interface{}) interface{} {\n//	  return i.(int) + 1\n//	}\n//	stream.Iterate(1, add1).Limit(3) <= will produce the same as\n//	stream.Of(1, 2, 3)\nfunc Iterate[T any](seed T, f func(T) T) Stream[T] {\n	return &baseStream[T]{&iterIter[T]{seed, f, false}, nil}\n}\n\ntype genIter[T any] struct {\n	f func() T\n}\n\nfunc (v *genIter[T]) Next() (T, bool) {\n	return v.f(), true\n}\n\n// Generate will use the GenFunc to generate a infinite stream\n// e.g.\n//\n//	stream.Generate(func() interface{} {\n//	  return 5\n//	}\n//\n// will generate a infinite stream of 5.\n// Note it is lazy so do not count infinite stream, it will not complete\n// Similarly, do not Reduce infinite stream\n// You can limit first before reducing\nfunc Generate[T any](f func() T) Stream[T] {\n	return &baseStream[T]{&genIter[T]{f}, nil}\n}\n\n// Return stream from iterator. stream's reduce function will consume all\n// items in iterator\nfunc FromIterator[T any](it Iterator[T]) Stream[T] {\n	return &baseStream[T]{it, nil}\n}\n\n// Return stream from array. It is safe to call multiple FromArray on same array\n// The call doesn't modify source array\nfunc FromArray[T any](it []T) Stream[T] {\n	ai := NewArrayIterator(it)\n	return &baseStream[T]{ai, nil}\n}\n\n// Return stream from channel. If you use same channel create multiple streams\n// all streams will share the channel and may see part of the data\n// Sender of channel must close or stream's reduce function/map function\n// may not terminate\nfunc FromChannel[T any](it chan T) Stream[T] {\n	ai := NewChannelIterator(it)\n	return &baseStream[T]{ai, nil}\n}\n\n// Create stream from map's keys. Note the iterator is a snapshot of map\n// subsequent modification after Stream is created won't be visiable to stream\nfunc FromMapKeys[K comparable, V any](it map[K]V) Stream[K] {\n	ai := NewMapKeyIterator(it)\n	return &baseStream[K]{ai, nil}\n}\n\n// Create stream from map's values. Note the iterator is a snapshot of map\n// subsequent modification after Stream is created won't be visiable to stream\nfunc FromMapValues[K comparable, V any](it map[K]V) Stream[V] {\n	ai := NewMapValueIterator(it)\n	return &baseStream[V]{ai, nil}\n}\n\n// Create stream from map's key value pairs. Note the iterator is a snapshot of map\n// subsequent modification after Stream is created won't be visiable to stream\nfunc FromMapEntries[K comparable, V any](it map[K]V) Stream[MapEntry[K, V]] {\n	ai := NewMapEntryIterator(it)\n	return &baseStream[MapEntry[K, V]]{ai, nil}\n}\n\n// Return stream's max, using supplied less than comparator.\n// Note since stream might be empty, the value is Optional.\n// Caller must use\n//\n//	val, ok := result.Value()\n//	if ok {\n//	  do_something_with(val)\n//	}\nfunc (v *baseStream[T]) MaxCmp(f Comparator[T]) Optional[T] {\n	return v.Reduce(func(arg1, arg2 T) T {\n		if f(arg1, arg2) >= 0 {\n			return arg1\n		}\n		return arg2\n	})\n}\n\nfunc (v *baseStream[T]) Map(f func(in T) interface{}) Stream[interface{}] {\n	return Map[T](v, f)\n}\n\n// Return stream's min, using natural comparison. Support number and string\n// Note since stream might be empty, the value is Optional.\n// Caller must use\n//\n//	val, ok := result.Value()\n//	if ok {\n//	  do_something_with(val)\n//	}\nfunc (v *baseStream[T]) MinCmp(f Comparator[T]) Optional[T] {\n	return v.Reduce(func(arg1, arg2 T) T {\n		if f(arg1, arg2) <= 0 {\n			return arg1\n		}\n		return arg2\n	})\n}\n\ntype baseStream[T any] struct {\n	src       Iterator[T]\n	closefunc func()\n}\n\ntype mapIterWrapper[F, T any] struct {\n	src Iterator[F]\n	f   func(F) T\n}\n\ntype filterIterWrapper[T any] struct {\n	src Iterator[T]\n	f   func(T) bool\n}\n\ntype limitIterWrapper[T any] struct {\n	src   Iterator[T]\n	limit int\n	count int\n}\n\nfunc (v *limitIterWrapper[T]) Next() (T, bool) {\n	if v.limit <= v.count {\n		var zv T\n		return zv, false\n	} true}
+Testing generator
+Sum is &{10000000 true} which should be 10000000
+Testing fibonacci generator again
+1
+2
+3
+5
+8
+13
+21
+34
+55
+89
+144
+233
+377
+610
+987
+1597
+2584
+4181
+6765
+10946
+17711
+28657
+46368
+75025
+121393
+196418
+317811
+514229
+832040
+1346269
+Testing sequence generator again
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+Testing range
+0++30 =  &{435 true}
+Testing skip
+0
+Testing Of and filter
+a
+Testing peek & Max, should be 9
+1
+2
+3
+4
+5
+6
+7
+8
+9
+&{9 true}
+Testing sum
+&{4950 true}
+20
+Testing channel
+425Closing file
+Closing file
+Doing other things too
+Don't forget not to create loop!
+PASS
+ok  	github.com/wushilin/stream	0.028s
