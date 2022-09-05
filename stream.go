@@ -137,6 +137,7 @@ type Stream[T any] interface {
 	CollectTo(target []T) int
 
 	// Collect all elements as slice
+	// If you collect all on unbounded Stream, you may run out of memory
 	CollectAll() []T
 
 	// Get max in the stream using a less comparator function
