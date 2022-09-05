@@ -2,6 +2,7 @@ package stream
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -169,6 +170,29 @@ func TestStream(*testing.T) {
 		fmt.Println(i)
 	})
 	s10.Close()
+
+	s11 := Of([]int{1, 2, 3}, []int{4, 5}, []int{}, []int{6, 7, 8, 9, 10})
+	s12 := Flatten(s11, func(i []int) []int { return i })
+	s12.Each(func(i int) {
+		fmt.Println("Hello", i)
+	})
+
+	s13 := Of("1,2", "3,4,5", "", "6,7,8,9", "10")
+	s14 := Flatten(s13, func(i string) []int {
+		tokens := strings.Split(i, ",")
+		result := []int{}
+		for _, str := range tokens {
+			if str == "" {
+				continue
+			}
+			num, _ := strconv.Atoi(str)
+			result = append(result, num)
+		}
+		return result
+	})
+	s14.Each(func(i int) {
+		fmt.Println("Hello", i)
+	})
 }
 
 func printString(i string) {

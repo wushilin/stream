@@ -954,3 +954,39 @@ func Pack5[T any](v Stream[T]) Stream[Quintuple[T, T, T, T, T]] {
 	dest := &pack5IterWrapper[T]{iter}
 	return WrapStream[T, Quintuple[T, T, T, T, T]](v, dest)
 }
+
+type flattenIter[T1, T2 any] struct {
+	src          Iterator[T1]
+	buffer       []T2
+	index        int
+	flatternFunc func(input T1) []T2
+}
+
+func (v *flattenIter[T1, T2]) Next() (T2, bool) {
+	if v.buffer == nil {
+		// no element
+		localbuffer, ok := v.src.Next()
+		if !ok {
+			var zv T2
+			return zv, false
+		}
+		v.buffer = v.flatternFunc(localbuffer)
+		v.index = 0
+		return v.Next()
+	}
+
+	if v.index >= len(v.buffer) {
+		v.buffer = nil
+		v.index = 0
+		return v.Next()
+	}
+	v.index++
+	return v.buffer[v.index-1], true
+}
+
+// Flattern a stream with expander
+// [1,2], [3], [4, 5],[] -> Flatten() -> [1,2,3,4,5]
+func Flatten[T1, T2 any](v Stream[T1], expander func(i T1) []T2) Stream[T2] {
+	dest := &flattenIter[T1, T2]{src: v.Iterator(), buffer: nil, index: 0, flatternFunc: expander}
+	return WrapStream[T1, T2](v, dest)
+}
