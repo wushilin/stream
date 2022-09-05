@@ -113,6 +113,62 @@ func TestStream(*testing.T) {
 	Range(0, 30).SendTo(sourcec)
 	close(sourcec)
 	<-done
+
+	var i = 0
+	new_stream := Generate(func() int {
+		i = i + 1
+		return i
+	}).Limit(120)
+	Pack2(new_stream).Each(
+		func(i Pair[int, int]) {
+			first, second := i.Value()
+			fmt.Printf("Pair[%d %d]\n", first, second)
+		})
+	i = 0
+	new_stream = Generate(func() int {
+		i = i + 1
+		return i
+	}).Limit(115)
+	Pack3(new_stream).Each(
+		func(i Triple[int, int, int]) {
+			first, second, third := i.Value()
+			fmt.Printf("Triple[%d %d %d]\n", first, second, third)
+		})
+	i = 4
+	new_stream = Generate(func() int {
+		i = i + 1
+		return i
+	}).Limit(115)
+	Pack4(new_stream).Each(
+		func(i Quadruple[int, int, int, int]) {
+			first, second, third, forth := i.Value()
+			fmt.Printf("Quadruple[%d %d %d %d]\n", first, second, third, forth)
+		})
+	i = 0
+	new_stream = Generate(func() int {
+		i = i + 1
+		return i
+	}).Limit(115)
+	Pack5(new_stream).Each(
+		func(i Quintuple[int, int, int, int, int]) {
+			first, second, third, forth, fifth := i.Value()
+			fmt.Printf("Qunintuple[%d %d %d %d %d]\n", first, second, third, forth, fifth)
+		})
+
+	s6 := Of(1, 2, 3, 4, 5)
+	s6.OnClose(func() {
+		fmt.Println("s6 is closed")
+	})
+	s7 := s6.Peek(func(i int) {})
+	s8 := s7.Limit(3)
+	s9 := Map(s8, func(i int) int {
+		return i + 18
+	})
+	s10 := s9.Limit(3)
+	s10.Each(func(i int) {
+		fmt.Println(i)
+	})
+	s10.Close()
 }
 
 func printString(i string) {

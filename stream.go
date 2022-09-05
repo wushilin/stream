@@ -14,23 +14,34 @@ type Comparator[T any] func(arg1, arg2 T) int
 
 // Optional value may or may not have a value
 type Optional[T any] interface {
-	// Return the value and if value doesn't exist, false.
+	// Return the value and if value is present
+	// Optional(1).Value() -> 1, true
+	// Optional(None).Value() -> <zero value>, false
 	// Caller need to check value exist before the value can be trusted
 	Value() (T, bool)
 
 	// Return another optional value, when call Value() on the new optional,
 	// return this object's value if present
 	// If not, return other's Value()
+	// Optional(1).Or(Optional(2)).Value() -> 1, true
+	// Optional(None).Or(Optional(2)).Value() -> 2, true
+	// Optional(None).Or(Optional(None)).Value() -> 0, false
 	Or(other Optional[T]) Optional[T]
 
 	// Return this object's value if present, or the defaultValue supplied
+	// Optional(1).OrValue(2) -> 1
+	// Optional(None).OrValue(2) -> 2
 	OrValue(defaultV T) T
 }
 
+// For each of the stream element, use a mapping functiont to transform it
+//
+//	stream.Map(Stream.of("1", "2", "3"), func(i string) int {
+//	    parse int here
+//	}) => [1,2,3]
 func Map[F any, T any](src Stream[F], f func(in F) T) Stream[T] {
-	return &baseStream[T]{&mapIterWrapper[F, T]{src.Iterator(), f}, func() {
-		src.Close()
-	}}
+	dest := &mapIterWrapper[F, T]{src.Iterator(), f}
+	return WrapStream[F, T](src, dest)
 }
 
 // Stream defines java like stream magics
@@ -91,10 +102,19 @@ type Stream[T any] interface {
 
 	// Close the stream. If your stream if from files, you have to close it.
 	// Any OnClose handler previously attached will be called
+	// If your stream is a result of operation on upstream streams, closing it
+	// will also close upstream stream
+	// e.g.
+	// s1 = stream.FromFileLines("test.txt")
+	// s2 = s1.Limit(5)
+	// s2.Close() => s1 will be closed too!
 	Close()
 
 	// Attach another close handler to the stream.
-	// The handler will be called after the previous handler had been called
+	// Previous handlers are still there
+	// Upon closing,
+	// This handler will be called after the previous handler had been called
+	// If you attach multiple handlers of same instance, it will be called multiple times
 	OnClose(closefunc func()) Stream[T]
 
 	// Return an iterator of elements from the stream
@@ -102,6 +122,8 @@ type Stream[T any] interface {
 
 	// Concat the other stream to end of current stream and return the new stream.
 	// Both original stream and other stream itself are not modified.
+	// The new stream's close handler will call this stream's close handler,
+	// then call the other stream's close handler
 	Concat(other Stream[T]) Stream[T]
 
 	// Collect elements to target. Target must be array/slice of same type as the elements.
@@ -158,7 +180,7 @@ func (v *iterIter[T]) Next() (T, bool) {
 // use MapFun and the previously returned value to generate the new value
 // e.g.
 //
-//	func add1(i interface{}) interface{} {
+//	func add1(i int) int {
 //	  return i.(int) + 1
 //	}
 //	stream.Iterate(1, add1).Limit(3) <= will produce the same as
@@ -173,6 +195,156 @@ type genIter[T any] struct {
 
 func (v *genIter[T]) Next() (T, bool) {
 	return v.f(), true
+}
+
+// A pair holds 2 values, potentially with same or different types
+// you can get the value both with Value() call, or get First() and Second() separately
+type Pair[T1, T2 any] interface {
+	First() T1
+	Second() T2
+	Value() (T1, T2)
+}
+
+// Same as pair, but for 3 values
+type Triple[T1, T2, T3 any] interface {
+	First() T1
+	Second() T2
+	Third() T3
+	Value() (T1, T2, T3)
+}
+
+// Same as pair, but 4 values
+type Quadruple[T1, T2, T3, T4 any] interface {
+	First() T1
+	Second() T2
+	Third() T3
+	Forth() T4
+	Value() (T1, T2, T3, T4)
+}
+
+// Same as pair, but 5 values
+type Quintuple[T1, T2, T3, T4, T5 any] interface {
+	First() T1
+	Second() T2
+	Third() T3
+	Forth() T4
+	Fifth() T5
+	Value() (T1, T2, T3, T4, T5)
+}
+
+type pairImpl[T1, T2 any] struct {
+	First_  T1
+	Second_ T2
+}
+
+func (v *pairImpl[T1, T2]) First() T1 {
+	return v.First_
+}
+
+func (v *pairImpl[T1, T2]) Second() T2 {
+	return v.Second_
+}
+
+func (v *pairImpl[T1, T2]) Value() (T1, T2) {
+	return v.First_, v.Second_
+}
+
+type tripleImpl[T1, T2, T3 any] struct {
+	First_  T1
+	Second_ T2
+	Third_  T3
+}
+
+func (v *tripleImpl[T1, T2, T3]) First() T1 {
+	return v.First_
+}
+
+func (v *tripleImpl[T1, T2, T3]) Second() T2 {
+	return v.Second_
+}
+
+func (v *tripleImpl[T1, T2, T3]) Third() T3 {
+	return v.Third_
+}
+func (v *tripleImpl[T1, T2, T3]) Value() (T1, T2, T3) {
+	return v.First_, v.Second_, v.Third_
+}
+
+type quodroImpl[T1, T2, T3, T4 any] struct {
+	First_  T1
+	Second_ T2
+	Third_  T3
+	Forth_  T4
+}
+
+func (v *quodroImpl[T1, T2, T3, T4]) First() T1 {
+	return v.First_
+}
+
+func (v *quodroImpl[T1, T2, T3, T4]) Second() T2 {
+	return v.Second_
+}
+
+func (v *quodroImpl[T1, T2, T3, T4]) Third() T3 {
+	return v.Third_
+}
+func (v *quodroImpl[T1, T2, T3, T4]) Forth() T4 {
+	return v.Forth_
+}
+
+func (v *quodroImpl[T1, T2, T3, T4]) Value() (T1, T2, T3, T4) {
+	return v.First_, v.Second_, v.Third_, v.Forth_
+}
+
+type quintImpl[T1, T2, T3, T4, T5 any] struct {
+	First_  T1
+	Second_ T2
+	Third_  T3
+	Forth_  T4
+	Fifth_  T5
+}
+
+func (v *quintImpl[T1, T2, T3, T4, T5]) First() T1 {
+	return v.First_
+}
+
+func (v *quintImpl[T1, T2, T3, T4, T5]) Second() T2 {
+	return v.Second_
+}
+
+func (v *quintImpl[T1, T2, T3, T4, T5]) Third() T3 {
+	return v.Third_
+}
+func (v *quintImpl[T1, T2, T3, T4, T5]) Forth() T4 {
+	return v.Forth_
+}
+
+func (v *quintImpl[T1, T2, T3, T4, T5]) Fifth() T5 {
+	return v.Fifth_
+}
+func (v *quintImpl[T1, T2, T3, T4, T5]) Value() (T1, T2, T3, T4, T5) {
+	return v.First_, v.Second_, v.Third_, v.Forth_, v.Fifth_
+}
+
+// Create a new Pair with 2 values
+func NewPair[T1, T2 any](first T1, second T2) Pair[T1, T2] {
+	result := &pairImpl[T1, T2]{First_: first, Second_: second}
+	return result
+}
+
+// Create a new triple with 3 values
+func NewTriple[T1, T2, T3 any](first T1, second T2, third T3) Triple[T1, T2, T3] {
+	return &tripleImpl[T1, T2, T3]{First_: first, Second_: second, Third_: third}
+}
+
+// Create a new Quodruple with 4 values
+func NewQuadruple[T1, T2, T3, T4 any](first T1, second T2, third T3, forth T4) Quadruple[T1, T2, T3, T4] {
+	return &quodroImpl[T1, T2, T3, T4]{First_: first, Second_: second, Third_: third, Forth_: forth}
+}
+
+// Create a new Quintuple with 5 values
+func NewQuintuple[T1, T2, T3, T4, T5 any](first T1, second T2, third T3, forth T4, fifth T5) Quintuple[T1, T2, T3, T4, T5] {
+	return &quintImpl[T1, T2, T3, T4, T5]{First_: first, Second_: second, Third_: third, Forth_: forth, Fifth_: fifth}
 }
 
 // Generate will use the GenFunc to generate a infinite stream
@@ -274,6 +446,108 @@ func (v *baseStream[T]) MinCmp(f Comparator[T]) Optional[T] {
 type baseStream[T any] struct {
 	src       Iterator[T]
 	closefunc func()
+}
+
+func WrapStream[T1, T2 any](src Stream[T1], iter Iterator[T2]) Stream[T2] {
+	return &baseStream[T2]{src: iter, closefunc: func() { src.Close() }}
+}
+
+type pack2IterWrapper[T any] struct {
+	src Iterator[T]
+}
+
+func (v *pack2IterWrapper[T]) Next() (Pair[T, T], bool) {
+	item1, ok := v.src.Next()
+	if !ok {
+		return nil, false
+	}
+	item2, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewPair(item1, zv), false
+	}
+	return NewPair(item1, item2), true
+}
+
+type pack3IterWrapper[T any] struct {
+	src Iterator[T]
+}
+
+func (v *pack3IterWrapper[T]) Next() (Triple[T, T, T], bool) {
+	item1, ok := v.src.Next()
+	if !ok {
+		return nil, false
+	}
+	item2, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewTriple(item1, zv, zv), false
+	}
+	item3, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewTriple(item1, item2, zv), false
+	}
+	return NewTriple(item1, item2, item3), true
+}
+
+type pack4IterWrapper[T any] struct {
+	src Iterator[T]
+}
+
+func (v *pack4IterWrapper[T]) Next() (Quadruple[T, T, T, T], bool) {
+	item1, ok := v.src.Next()
+	if !ok {
+		return nil, false
+	}
+	item2, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewQuadruple(item1, zv, zv, zv), false
+	}
+	item3, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewQuadruple(item1, item2, zv, zv), false
+	}
+	item4, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewQuadruple(item1, item2, item3, zv), false
+	}
+	return NewQuadruple(item1, item2, item3, item4), true
+}
+
+type pack5IterWrapper[T any] struct {
+	src Iterator[T]
+}
+
+func (v *pack5IterWrapper[T]) Next() (Quintuple[T, T, T, T, T], bool) {
+	item1, ok := v.src.Next()
+	if !ok {
+		return nil, false
+	}
+	item2, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewQuintuple(item1, zv, zv, zv, zv), false
+	}
+	item3, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewQuintuple(item1, item2, zv, zv, zv), false
+	}
+	item4, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewQuintuple(item1, item2, item3, zv, zv), false
+	}
+	item5, ok := v.src.Next()
+	if !ok {
+		var zv T
+		return NewQuintuple(item1, item2, item3, item4, zv), false
+	}
+	return NewQuintuple(item1, item2, item3, item4, item5), true
 }
 
 type mapIterWrapper[F, T any] struct {
@@ -403,13 +677,13 @@ func (v *baseStream[T]) EachCondition(f func(T) bool) {
 func (v *baseStream[T]) Filter(f func(T) bool) Stream[T] {
 	iter := v.src
 	dest := &filterIterWrapper[T]{iter, f}
-	return &baseStream[T]{dest, nil}
+	return WrapStream[T, T](v, dest)
 }
 
 func (v *baseStream[T]) Limit(limit int) Stream[T] {
 	iter := v.src
 	dest := &limitIterWrapper[T]{iter, limit, 0}
-	return &baseStream[T]{dest, nil}
+	return WrapStream[T, T](v, dest)
 }
 
 func (v *baseStream[T]) OnClose(f func()) Stream[T] {
@@ -487,7 +761,11 @@ func (v *concatIter[T]) Next() (T, bool) {
 func (v *baseStream[T]) Concat(other Stream[T]) Stream[T] {
 	iter := v.src
 	dest := &concatIter[T]{iter, other.Iterator(), false, false}
-	return &baseStream[T]{dest, nil}
+	closehandler := func() {
+		v.Close()
+		other.Close()
+	}
+	return &baseStream[T]{src: dest, closefunc: closehandler}
 }
 
 func (v *baseStream[T]) CollectTo(dest []T) (count int) {
@@ -576,7 +854,8 @@ func (v *skipIter[T]) Next() (T, bool) {
 }
 
 func (v *baseStream[T]) Skip(number int) Stream[T] {
-	return &baseStream[T]{&skipIter[T]{v.src, number, 0}, nil}
+	dest := &skipIter[T]{v.src, number, 0}
+	return WrapStream[T, T](v, dest)
 }
 
 func (v *baseStream[T]) SendTo(c chan T) {
@@ -600,7 +879,8 @@ func (v *peekIter[T]) Next() (T, bool) {
 	}
 }
 func (v *baseStream[T]) Peek(f func(T)) Stream[T] {
-	return &baseStream[T]{&peekIter[T]{v.src, f}, nil}
+	dest := &peekIter[T]{v.src, f}
+	return WrapStream[T, T](v, dest)
 }
 
 // Create a stream from a set of values.
@@ -646,4 +926,31 @@ func WithIndex[T any](v Stream[T]) Stream[NumberedItem[T]] {
 		index++
 		return NumberedItem[T]{new_index, i}
 	})
+}
+
+// Compacts the stream of pairs
+// 1,2,3,4,5,6,7,8,9,10 => [1,2], [3,4], [5,6], [7, 8], [9, 10]
+// 1,2,3,4,5 => [1,2], [3, 4]. If you need the last value, it is returned as [5, 0], false
+func Pack2[T any](v Stream[T]) Stream[Pair[T, T]] {
+	iter := v.Iterator()
+	dest := &pack2IterWrapper[T]{iter}
+	return WrapStream[T, Pair[T, T]](v, dest)
+}
+
+func Pack3[T any](v Stream[T]) Stream[Triple[T, T, T]] {
+	iter := v.Iterator()
+	dest := &pack3IterWrapper[T]{iter}
+	return WrapStream[T, Triple[T, T, T]](v, dest)
+}
+
+func Pack4[T any](v Stream[T]) Stream[Quadruple[T, T, T, T]] {
+	iter := v.Iterator()
+	dest := &pack4IterWrapper[T]{iter}
+	return WrapStream[T, Quadruple[T, T, T, T]](v, dest)
+}
+
+func Pack5[T any](v Stream[T]) Stream[Quintuple[T, T, T, T, T]] {
+	iter := v.Iterator()
+	dest := &pack5IterWrapper[T]{iter}
+	return WrapStream[T, Quintuple[T, T, T, T, T]](v, dest)
 }
