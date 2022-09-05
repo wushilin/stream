@@ -212,7 +212,10 @@ func TestStream(*testing.T) {
 		return i + 100
 	}, tp)
 	futs.Each(func(i future.Future[int]) {
-		fmt.Println(i.GetWait())
+		// Don't let your program die
+		i.Then(func(i int) {
+			fmt.Println("Future value is confirmed", i)
+		})
 	})
 	elapsed := time.Since(now)
 	fmt.Println("Time taken", elapsed)
@@ -224,7 +227,11 @@ func TestStream(*testing.T) {
 		return i + 100
 	})
 	futs.Each(func(i future.Future[int]) {
-		fmt.Println(i.GetWait())
+		fmt.Println("PMap ->", i.GetWait())
+		i.Then(
+			func(v int) {
+				fmt.Println("Finally...", v)
+			})
 	})
 	elapsed = time.Since(now)
 	fmt.Println("Time taken", elapsed)
