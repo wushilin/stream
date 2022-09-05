@@ -7,6 +7,9 @@ import (
 	"bufio"
 	"io"
 	"os"
+
+	"github.com/wushilin/future"
+	"github.com/wushilin/threads"
 )
 
 // Comparator returns -1 if arg1 < arg2, returns 0 if arg1 == arg2 and returns 1 if arg1 > arg2
@@ -39,7 +42,7 @@ type Optional[T any] interface {
 //	stream.Map(Stream.of("1", "2", "3"), func(i string) int {
 //	    parse int here
 //	}) => [1,2,3]
-func Map[F any, T any](src Stream[F], f func(in F) T) Stream[T] {
+func Map[F, T any](src Stream[F], f func(in F) T) Stream[T] {
 	dest := &mapIterWrapper[F, T]{src.Iterator(), f}
 	return WrapStream[F, T](src, dest)
 }
@@ -132,6 +135,9 @@ type Stream[T any] interface {
 	// When number of elements collected equal to slice/array cap, there might be more elemnts to be collected
 	// otherwise, it is guaranteed no more elements left in stream
 	CollectTo(target []T) int
+
+	// Collect all elements as slice
+	CollectAll() []T
 
 	// Get max in the stream using a less comparator function
 	MaxCmp(cmp Comparator[T]) Optional[T]
@@ -446,6 +452,15 @@ func (v *baseStream[T]) MinCmp(f Comparator[T]) Optional[T] {
 type baseStream[T any] struct {
 	src       Iterator[T]
 	closefunc func()
+}
+
+func (v *baseStream[T]) CollectAll() []T {
+	result := make([]T, 0)
+	iter := v.Iterator()
+	for next, ok := iter.Next(); ok; next, ok = iter.Next() {
+		result = append(result, next)
+	}
+	return result
 }
 
 func WrapStream[T1, T2 any](src Stream[T1], iter Iterator[T2]) Stream[T2] {
@@ -989,4 +1004,37 @@ func (v *flattenIter[T1, T2]) Next() (T2, bool) {
 func Flatten[T1, T2 any](v Stream[T1], expander func(i T1) []T2) Stream[T2] {
 	dest := &flattenIter[T1, T2]{src: v.Iterator(), buffer: nil, index: 0, flatternFunc: expander}
 	return WrapStream[T1, T2](v, dest)
+}
+
+// If the element is already arrays, you can simply flatten them without arguments
+func FlattenArray[T any](v Stream[[]T]) Stream[T] {
+	return Flatten(v, func(i []T) []T { return i })
+}
+
+// For each of the elements, convert it to a future. This uses an unbouded goroutine, use with care
+// If Stream is too big, it may create millions of goroutines.
+func ParallelMap[T1, T2 any](src Stream[T1], mapper func(i T1) T2, pool *threads.ThreadPool) Stream[future.Future[T2]] {
+	elements := src.CollectAll()
+	result := make([]future.Future[T2], 0)
+	for _, elem := range elements {
+		copied := elem
+		result = append(result, threads.SubmitTask(pool, func() T2 {
+			return mapper(copied)
+		}))
+	}
+	return FromArray(result)
+}
+
+// For each of the elements, convert it to a future. This uses an unbouded goroutine, use with care
+// If Stream is too big, it may create millions of goroutines.
+func ParallelMapUbounded[T1, T2 any](src Stream[T1], mapper func(i T1) T2) Stream[future.Future[T2]] {
+	elements := src.CollectAll()
+	result := make([]future.Future[T2], 0)
+	for _, elem := range elements {
+		copied := elem
+		result = append(result, future.FutureOf(func() T2 {
+			return mapper(copied)
+		}))
+	}
+	return FromArray(result)
 }

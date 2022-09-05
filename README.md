@@ -304,3 +304,47 @@ stream.Pack4(stream.Of(1,2,3,4,5,6)) => [1,2,3,4]
 	})
         //s14-> [1,2,3,4,5,6,7,8,9,10]
 ```
+
+##### Parallel map and Future value support
+```go
+  // Warning - this may create many go routines. Only call it if you know the stream is bounded!
+	src = Range(0, 1000)
+	// Spawn as many goroutines as possible to map each elements in the stream
+  // using the mapper function.
+	futs = ParallelMapUbounded(src, func(i int) int {
+		<-time.After(5 * time.Second)
+		return i + 100
+	})
+  // Print the results
+	futs.Each(func(i future.Future[int]) {
+		fmt.Println(i.GetWait())
+	})
+  // The above code would take almost exactly 5 seconds
+```
+
+##### Parallel do with an executor
+```go
+	src := Range(0, 1000)
+  // Create a new executor with max of 300 parallel goroutines
+  // And max pending task is 1 million
+	threadPool := threads.NewPool(300, 1000000)
+  // Eventually cleanup the pool
+	defer func() {
+		threadPool.Shutdown()
+		threadPool.Wait()
+		fmt.Println("Thread pool stopped")
+	}()
+  // Start the executor
+	tp.Start()
+  // Parall Map the object to future
+	futs := ParallelMap(src, func(i int) int {
+		<-time.After(5 * time.Second)
+		return i + 100
+	}, threadPool)
+
+
+	futs.Each(func(i future.Future[int]) {
+		fmt.Println(i.GetWait())
+	})
+  // The above code would take almost exact 20 seconds
+```

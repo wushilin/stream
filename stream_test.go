@@ -5,6 +5,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/wushilin/future"
+	"github.com/wushilin/threads"
 )
 
 func TestStream(*testing.T) {
@@ -193,6 +197,37 @@ func TestStream(*testing.T) {
 	WithIndex(s14).Each(func(i NumberedItem[int]) {
 		fmt.Println("Hello", i.Index, "->", i.Item)
 	})
+
+	now := time.Now()
+	src := Range(0, 1000)
+	tp := threads.NewPool(300, 1000000)
+	defer func() {
+		tp.Shutdown()
+		tp.Wait()
+		fmt.Println("Thread pool stopped")
+	}()
+	tp.Start()
+	futs := ParallelMap(src, func(i int) int {
+		<-time.After(5 * time.Second)
+		return i + 100
+	}, tp)
+	futs.Each(func(i future.Future[int]) {
+		fmt.Println(i.GetWait())
+	})
+	elapsed := time.Since(now)
+	fmt.Println("Time taken", elapsed)
+
+	src = Range(0, 1000)
+	now = time.Now()
+	futs = ParallelMapUbounded(src, func(i int) int {
+		<-time.After(5 * time.Second)
+		return i + 100
+	})
+	futs.Each(func(i future.Future[int]) {
+		fmt.Println(i.GetWait())
+	})
+	elapsed = time.Since(now)
+	fmt.Println("Time taken", elapsed)
 }
 
 func printString(i string) {
