@@ -279,7 +279,7 @@ close(destc)
 ```
 
 
-## Pack2, Pack3, Pack4, Pack5 Package stream items in pairs, triples, quadruples, and quintuples
+##### Pack2, Pack3, Pack4, Pack5 Package stream items in pairs, triples, quadruples, and quintuples
 ```go
 stream.Pack2(stream.Of(1,2,3,4,5)) => [1,2], [3,4]
 stream.Pack3(stream.Of(1,2,3,4,5,6)) => [1,2,3], [4,5,6]
@@ -287,7 +287,7 @@ stream.Pack4(stream.Of(1,2,3,4,5,6)) => [1,2,3,4]
 ```
 
 
-## Flatten, expand elements in place
+##### Flatten, expand elements in place
 ```go
 	s13 := Of("1,2", "3,4,5", "", "6,7,8,9", "10")
 	s14 := Flatten(s13, func(i string) []int {

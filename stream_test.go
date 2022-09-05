@@ -190,8 +190,8 @@ func TestStream(*testing.T) {
 		}
 		return result
 	})
-	s14.Each(func(i int) {
-		fmt.Println("Hello", i)
+	WithIndex(s14).Each(func(i NumberedItem[int]) {
+		fmt.Println("Hello", i.Index, "->", i.Item)
 	})
 }
 

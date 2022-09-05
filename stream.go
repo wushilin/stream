@@ -899,7 +899,7 @@ func Of[T any](vars ...T) Stream[T] {
 }
 
 type NumberedItem[T any] struct {
-	Index int
+	Index int64
 	Item  T
 }
 
@@ -920,7 +920,7 @@ type NumberedItem[T any] struct {
 // }
 
 func WithIndex[T any](v Stream[T]) Stream[NumberedItem[T]] {
-	index := 0
+	index := int64(0)
 	return Map(v, func(i T) NumberedItem[T] {
 		new_index := index
 		index++
